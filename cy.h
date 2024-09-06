@@ -222,7 +222,7 @@ static void *cy_alloc_align(CyAllocator a, isize size, isize align)
         size, align,
         NULL, 0,
         CY_DEFAULT_ALLOCATOR_FLAGS
-    );    
+    );
 }
 
 static void *cy_alloc(CyAllocator a, isize size)
@@ -238,7 +238,7 @@ static void cy_free(CyAllocator a, void *ptr)
             0, 0,
             ptr, 0,
             CY_DEFAULT_ALLOCATOR_FLAGS
-        );    
+        );
     }
 }
 
@@ -249,7 +249,7 @@ static void cy_free_all(CyAllocator a)
         0, 0,
         NULL, 0,
         CY_DEFAULT_ALLOCATOR_FLAGS
-    );    
+    );
 }
 
 static void *cy_resize_align(CyAllocator a, void *ptr, isize old_size, isize new_size, isize align)
@@ -259,7 +259,7 @@ static void *cy_resize_align(CyAllocator a, void *ptr, isize old_size, isize new
         new_size, align,
         ptr, old_size,
         CY_DEFAULT_ALLOCATOR_FLAGS
-    );    
+    );
 }
 
 static void *cy_resize(CyAllocator a, void *ptr, isize old_size, isize new_size)
@@ -281,7 +281,7 @@ static char *cy_alloc_string_len(CyAllocator a, const char *str, isize len)
 {
     char *res = cy_alloc_copy(a, str, len + 1);
     res[len] = '\0';
-    return res; 
+    return res;
 }
 
 #define U8_MAX 0xFFU
@@ -294,7 +294,7 @@ static inline isize cy_string_len(const char *str)
     if (str == NULL) {
         return 0;
     }
-    
+
     const char *begin = str;
     while ((uintptr)str % sizeof(isize) != 0) {
         if (*str == '\0') {
@@ -372,7 +372,6 @@ static inline usize cy_calc_header_padding(
 
 /* ---------- Page Allocator Section ---------- */
 #if defined(CY_OS_WINDOWS)
-    #include <windows.h>
     #define CY_PAGE_SIZE (4 * 1024)
 #else
     #include <unistd.h>
