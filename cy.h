@@ -1,12 +1,19 @@
 #ifndef _CY_H
 #define _CY_H
 
-// NOTE(cya): a lot of this library is taken from GingerBill's gb library
+// NOTE(cya): a lot of ideas here are from GingerBill's gb library
 // https://github.com/gingerBill/gb/blob/master/gb.h
 
 #if defined(_WIN32) || defined(_WIN64)
     #define CY_OS_WINDOWS 1
+
+    #define WIN32_LEAN_AND_MEAN 1
+    #define VC_EXTRALEAN 1
+	#define NOMINMAX 1
     #include <windows.h>
+    #undef WIN32_LEAN_AND_MEAN
+    #undef VC_EXTRALEAN
+    #undef NOMINMAX
 #elif defined(__APPLE__) && defined(__MACH__)
     #define CY_OS_MACOSX 1
 #elif defined(__unix__)
@@ -29,21 +36,21 @@
 /* ================================= Types ================================== */
 #ifdef _MSC_VER
     #if _MSC_VER < 1300
-    typedef signed char i8;
-    typedef signed short i16;
-    typedef signed int i32;
+typedef signed char i8;
+typedef signed short i16;
+typedef signed int i32;
 
-    typedef unsigned char u8;
-    typedef unsigned short u16;
-    typedef unsigned int u32;
+typedef unsigned char u8;
+typedef unsigned short u16;
+typedef unsigned int u32;
     #else
-    typedef signed __int8 i8;
-    typedef signed __int16 i16;
-    typedef signed __int32 i32;
+typedef signed __int8 i8;
+typedef signed __int16 i16;
+typedef signed __int32 i32;
 
-    typedef unsigned __int8 u8;
-    typedef unsigned __int16 u16;
-    typedef unsigned __int32 u32;
+typedef unsigned __int8 u8;
+typedef unsigned __int16 u16;
+typedef unsigned __int32 u32;
     #endif
 
 typedef signed __int64 i64;
@@ -51,15 +58,15 @@ typedef unsigned __int64 u64;
 #else
     #include <stdint.h>
 
-    typedef int8_t i8;
-    typedef int16_t i16;
-    typedef int32_t i32;
-    typedef int64_t i64;
+typedef int8_t i8;
+typedef int16_t i16;
+typedef int32_t i32;
+typedef int64_t i64;
 
-    typedef uint8_t u8;
-    typedef uint16_t u16;
-    typedef uint32_t u32;
-    typedef uint64_t u64;
+typedef uint8_t u8;
+typedef uint16_t u16;
+typedef uint32_t u32;
+typedef uint64_t u64;
 #endif
 
 #define U8_MIN 0U
@@ -121,16 +128,24 @@ typedef i32 Rune; // Unicode codepoint
 
 CY_STATIC_ASSERT(true); // sanity check
 
+#ifndef NDEBUG
+    #define CY_DEBUG 1
+#endif
+
 #ifndef CY_ASSERT_MSG
-    #define CY_ASSERT_MSG(cond, msg, ...) { \
-        if (!(cond)) { \
-            cy_handle_assertion( \
-                "Assertion failed",#cond, \
-                __FILE__, (i64)__LINE__, msg, ##__VA_ARGS__ \
-            ); \
-            CY_DEBUG_TRAP(); \
-        } \
-    } (void)0
+    #if defined(CY_DEBUG)
+        #define CY_ASSERT_MSG(cond, ...) { \
+            if (!(cond)) { \
+                cy_handle_assertion( \
+                    "Assertion failed",#cond, \
+                    __FILE__, (i64)__LINE__, __VA_ARGS__ \
+                ); \
+                CY_DEBUG_TRAP(); \
+            } \
+        } (void)0
+    #else
+        #define CY_ASSERT_MSG(cond, ...) (void)(cond)
+    #endif
 #endif
 
 #ifndef CY_ASSERT
@@ -206,6 +221,7 @@ static void *cy_mem_zero(void *dst, usize bytes)
 }
 
 #define CY_BIT(n) (1 << (n))
+#define CY_UNUSED(param) (void)(param)
 
 /* =============================== Allocators =============================== */
 
@@ -220,12 +236,12 @@ typedef enum {
     CY_ALLOCATOR_CLEAR_TO_ZERO = CY_BIT(0),
 } CyAllocatorFlags;
 
-#define CY_ALLOCATOR_PROC(name)                 \
-    void *name(                                 \
-        void *allocator, CyAllocationType type, \
-        isize size, isize align,                \
-        void *old_mem, isize old_size,          \
-        u64 flags                               \
+#define CY_ALLOCATOR_PROC(name)                      \
+    void *name(                                      \
+        void *allocator_data, CyAllocationType type, \
+        isize size, isize align,                     \
+        void *old_mem, isize old_size,               \
+        u64 flags                                    \
     )
 
 typedef CY_ALLOCATOR_PROC(CyAllocatorProc);
@@ -275,8 +291,13 @@ static inline void cy_free_all(CyAllocator a)
     );
 }
 
-static inline void *cy_resize_align(CyAllocator a, void *ptr, isize old_size, isize new_size, isize align)
-{
+static inline void *cy_resize_align(
+    CyAllocator a,
+    void *ptr,
+    isize old_size,
+    isize new_size,
+    isize align
+) {
     return a.proc(
         a.data, CY_ALLOCATION_RESIZE,
         new_size, align,
@@ -285,8 +306,12 @@ static inline void *cy_resize_align(CyAllocator a, void *ptr, isize old_size, is
     );
 }
 
-static inline void *cy_resize(CyAllocator a, void *ptr, isize old_size, isize new_size)
-{
+static inline void *cy_resize(
+    CyAllocator a,
+    void *ptr,
+    isize old_size,
+    isize new_size
+) {
     return cy_resize_align(a, ptr, old_size, new_size, CY_DEFAULT_ALIGNMENT);
 }
 
@@ -309,7 +334,7 @@ static inline void *cy_default_resize_align(
         return old_mem;
     }
 
-    void *new_mem = cy_alloc_align(a, new_size, align);    
+    void *new_mem = cy_alloc_align(a, new_size, align);
     if (new_mem == NULL) {
         return NULL;
     }
@@ -339,9 +364,9 @@ static inline char *cy_alloc_string_len(CyAllocator a, const char *str, isize le
 // TODO(cya): figure out this sorcery
 #define CY__ONES ((usize)-1 / U8_MAX)
 #define CY__HIGHS (CY__ONES * (U8_MAX / 2 + 1))
-#define CY__HAS_ZERO_BYTE(word) !!((word) - CY__ONES & ~(word) & CY__HIGHS)
+#define CY__HAS_ZERO_BYTE(word) !!(((word) - CY__ONES) & ~(word) & CY__HIGHS)
 
-static inline isize cy_string_len(const char *str)
+static inline isize cy_cstring_len(const char *str)
 {
     if (str == NULL) {
         return 0;
@@ -367,7 +392,7 @@ static inline isize cy_string_len(const char *str)
 
 static inline char *cy_alloc_string(CyAllocator a, const char *str)
 {
-    return cy_alloc_string_len(a, str, cy_string_len(str));
+    return cy_alloc_string_len(a, str, cy_cstring_len(str));
 }
 
 #include <malloc.h>
@@ -390,6 +415,8 @@ static CyAllocator cy_heap_allocator(void)
 // TODO(cya): implement a general-purpose heap allocator to replace malloc
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 {
+    CY_UNUSED(allocator_data);
+
     void *ptr = NULL;
     switch(type) {
     case CY_ALLOCATION_ALLOC: {
@@ -400,20 +427,20 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
         if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
             cy_mem_zero(ptr, size);
         }
-    } break; 
+    } break;
     case CY_ALLOCATION_FREE: {
         free(old_mem);
-    } break; 
+    } break;
     case CY_ALLOCATION_FREE_ALL: {
         CY_ASSERT_MSG(false, "heap allocator doesn't support free-all");
-    } break; 
+    } break;
     case CY_ALLOCATION_RESIZE: {
         ptr = cy_default_resize_align(
             cy_heap_allocator(),
             old_mem, old_size,
             size, align
         );
-    } break; 
+    } break;
     }
 
     return ptr;
@@ -424,12 +451,12 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 
 static inline b8 cy_is_power_of_two(isize n)
 {
-    return (n > 0) && (n & (n - 1)) == 0;
+    return (n & (n - 1)) == 0;
 }
 
 static inline isize cy_align_forward(isize size, isize align)
 {
-    CY_ASSERT(cy_is_power_of_two(align));
+    CY_ASSERT(align > 0 && cy_is_power_of_two(align));
 
     isize mod = size & (align - 1);
     return mod ? size + align - mod : size;
@@ -461,12 +488,15 @@ static inline usize cy_calc_header_padding(
     return (usize)padding;
 }
 
-/* ---------- Page Allocator Section ---------- */
+/* ------------------------- Page Allocator Section ------------------------- */
 #if defined(CY_OS_WINDOWS)
     #define CY_PAGE_SIZE (4 * 1024)
 #else
-    #include <unistd.h>
     #include <sys/mman.h>
+    #ifndef MAP_ANONYMOUS
+        #define MAP_ANONYMOUS MAP_ANON
+    #endif
+
     #if defined(CY_OS_MACOSX)
         #define CY_PAGE_SIZE (16 * 1024)
     #else
@@ -474,134 +504,113 @@ static inline usize cy_calc_header_padding(
     #endif
 #endif
 
+typedef struct {
+    void *data;
+    isize size;
+} CyPageInfo;
 
-// TODO(cya): restructure this to fit new allocator interface
-typedef struct PageChunk {
-    usize size;  // Total size of allocation (including aligned meta-chunk)
-    usize align; // Alignment (for tracking down the start of the allocation)
-} PageChunk;
+CyAllocatorProc cy_page_allocator_proc;
 
-/* Returns the total size of the page(s) reserved by the OS (including chunk) */
-static inline usize cy_page_aligned_size(void *ptr)
+static CyAllocator cy_page_allocator(CyPageInfo *page_data)
 {
-    PageChunk *chunk = (PageChunk*)((char*)ptr - sizeof(*chunk));
-    return chunk->size;
+    return (CyAllocator){
+        .data = page_data,
+        .proc = cy_page_allocator_proc,
+    };
 }
 
-static inline void *page_alloc_align(usize size, usize align)
+#define CY_MIN(a, b) (a < b ? a : b)
+#define CY_MAX(a, b) (a > b ? a : b)
+
+#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
+
+CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 {
-    CY_ASSERT(size > 0);
+    CY_UNUSED(old_size);
+    CY_UNUSED(flags);
 
-    isize chunk_aligned_size =
-        cy_align_forward(sizeof(PageChunk), align);
-    isize aligned_size =
-        cy_align_forward(size + chunk_aligned_size,
-            align > CY_PAGE_SIZE ? align : CY_PAGE_SIZE);
-    PageChunk chunk = { .size = aligned_size, .align = align };
+    CyPageInfo *page_info = (CyPageInfo*)allocator_data;
+    void *ptr = NULL;
+    switch (type) {
+    case CY_ALLOCATION_ALLOC: {
+        CY_ASSERT_MSG(size > 0, "page allocator: invalid allocation size");
+        // NOTE(cya): maybe this is too intrusive?
+        CY_ASSERT_MSG(page_info->data == NULL, "page allocator: memory leak");
 
-    void *mem = NULL;
+        isize alloc_size = cy_align_forward(size, CY_MAX(align, CY_PAGE_SIZE));
 #if defined(CY_OS_WINDOWS)
-    mem = VirtualAlloc(NULL, aligned_size,
-        MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
+        ptr = VirtualAlloc(
+            NULL, aligned_size,
+            MEM_COMMIT | MEM_RESERVE,
+            PAGE_READWRITE
+        );
 #else
-    mem = mmap(NULL, aligned_size, PROT_READ | PROT_WRITE,
-        MAP_PRIVATE | MAP_ANON, -1, 0);
+        ptr = mmap(
+            NULL, alloc_size,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1, 0
+        );
 #endif
-    if (mem == NULL) return NULL;
+        CY_VALIDATE_PTR(ptr);
+        CY_ASSERT(ptr == cy_align_ptr_forward(ptr, align));
 
-    CY_ASSERT(mem == cy_align_ptr_forward(mem, align));
-
-    /* Append size of allocation to the area just before the first byte
-     * of aligned memory which will be handed to the caller at return */
-    cy_mem_copy((u8*)mem + chunk_aligned_size - sizeof(chunk),
-        &chunk, sizeof(chunk));
-
-    return (void*)((u8*)mem + chunk_aligned_size);
-}
-
-/* Returns an allocated block of memory containing [size] bytes rounded
- * up to a multiple of the system's page size (with default alignment) */
-static inline void *page_alloc(usize size)
-{
-    return page_alloc_align(size, CY_DEFAULT_ALIGNMENT);
-}
-
-/* Immediately returns the allocated memory starting @ [ptr] back to the OS */
-static inline void page_free(void *ptr)
-{
-    /* All allocated pages will have a metadata chunk right before the
-     * beginning of the pointer that must be stepped back into
-     * in order to free the whole block -> [*...[PageChunk][ptr]...] */
-    PageChunk* chunk = (PageChunk*)((char*)ptr - sizeof(*chunk));
-
+        page_info->data = ptr;
+        page_info->size = alloc_size;
+    } break;
+    case CY_ALLOCATION_FREE: {
 #if defined(CY_OS_WINDOWS)
-    VirtualFree((void*)chunk, 0, MEM_RELEASE);
+        VirtualFree(old_mem, 0, MEM_RELEASE);
 #else
-    const isize chunk_aligned_size =
-        cy_align_forward(sizeof(*chunk), chunk->align);
-    munmap((char*)ptr - chunk_aligned_size, chunk->size);
+        munmap(old_mem, page_info->size);
 #endif
-}
+    } break;
+    case CY_ALLOCATION_FREE_ALL: {
+        CY_ASSERT_MSG(false, "page allocator doesn't support free-all");
+    } break;
+    case CY_ALLOCATION_RESIZE: {
+        CY_ASSERT(page_info->data == old_mem);
 
-static inline void *page_realloc_align(
-    void *ptr,
-    usize new_size,
-    usize align
-) {
+        isize cur_size = page_info->size;
+        isize new_size = cy_align_forward(size, CY_MAX(align, CY_PAGE_SIZE));
 
-    PageChunk *chunk = (PageChunk*)((char*)ptr - sizeof(*chunk));
-
-    const isize current_size = chunk->size;
-    const isize new_aligned_size = cy_align_forward(new_size, align);
-    const isize chunk_aligned_size =
-        cy_align_forward(sizeof(*chunk), chunk->align);
-    const isize new_page_aligned_size = cy_align_forward(
-        new_aligned_size + chunk_aligned_size, CY_PAGE_SIZE);
-
-    if (new_page_aligned_size <= current_size) {
-        isize isizeo_free = current_size - new_size - chunk_aligned_size;
+        if (new_size <= cur_size) {
+            isize size_to_free = cur_size - new_size;
+            u8 *region_to_free = (u8*)old_mem + new_size;
 
 #if defined(CY_OS_WINDOWS)
-        VirtualFree((char*)ptr + new_size, isizeo_free, MEM_DECOMMIT);
+            VirtualFree(region_to_free, size_to_free, MEM_DECOMMIT);
 #else
-        munmap((char*)ptr + new_size, isizeo_free);
+            munmap(region_to_free, size_to_free);
 #endif
 
-        chunk->size = new_page_aligned_size;
-        return ptr;
+            page_info->size = new_size;
+            return old_mem;
+        }
+
+        CyPageInfo new_info = {0};
+        CyAllocator a = cy_page_allocator(&new_info);
+        void *new_ptr = cy_alloc(a, new_size);
+        CY_VALIDATE_PTR(new_ptr);
+
+        cy_mem_copy(new_ptr, old_mem, cur_size);
+        cy_free(cy_page_allocator(page_info), old_mem);
+
+        *page_info = new_info;
+        ptr = new_ptr;
+    } break;
     }
 
-    void *new_ptr = page_alloc(new_aligned_size);
-    if (new_ptr == NULL) return NULL;
-
-    cy_mem_copy(new_ptr, ptr, current_size - chunk_aligned_size);
-    page_free(ptr);
-
-    return new_ptr;
-}
-
-/* Returns a pointer to a block of memory containing the same data as [ptr]
- * (or up to where the new size allows, in case it's smaller the current size)
- * If a reallocation is needed and FAILS, page_realloc() returns NULL and
- * DOESN'T free the block pointed to by [ptr] */
-static inline void *page_realloc(void *ptr, usize new_size)
-{
-    return page_realloc_align(ptr, new_size, CY_DEFAULT_ALIGNMENT);
-}
-
-/* Returns the allocation size that was given to page_alloc/page_realloc */
-static inline usize page_get_size(void *ptr)
-{
-    PageChunk *chunk = (PageChunk*)((char*)ptr - sizeof(*chunk));
-    return chunk->size - cy_align_forward(sizeof(*chunk), chunk->align);
+    return ptr;
 }
 
 /* ------------------------ Arena Allocator Section ------------------------- */
+// TODO(cya): add init_from_buffer proc to this and other allocators
 typedef struct CyArenaNode {
     u8 *buf;                  // actual arena memory
-    usize size;               // size of the buffer in bytes
-    usize offset;             // offset to first byte of (unaligned) free memory
-    usize prev_offset;        // offset to first byte of previous allocation
+    isize size;               // size of the buffer in bytes
+    isize offset;             // offset to first byte of (unaligned) free memory
+    isize prev_offset;        // offset to first byte of previous allocation
     struct CyArenaNode *next; // next node (duh)
 } CyArenaNode;
 
@@ -632,10 +641,17 @@ static inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
     CY_ASSERT_NOT_NULL(backing.proc);
 
     isize default_size = CY_ARENA_INIT_SIZE;
-    if (initial_size == 0) initial_size = default_size;
+    if (initial_size == 0) {
+        initial_size = default_size;
+    }
 
-    CyArenaNode *first_node = cy_alloc(backing, initial_size);
-    first_node->buf = (unsigned char*)(first_node + 1);
+    isize aligned_node_size = cy_align_forward(
+        sizeof(CyArenaNode),
+        CY_DEFAULT_ALIGNMENT
+    );
+    isize first_node_size = aligned_node_size + initial_size;
+    CyArenaNode *first_node = cy_alloc(backing, first_node_size);
+    first_node->buf = (u8*)first_node + aligned_node_size;
     first_node->size = initial_size;
 
     return (CyArena){
@@ -654,8 +670,6 @@ static inline void arena_deinit(CyArena *arena)
     }
 }
 
-#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
-
 static inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
 {
     isize new_node_size = sizeof(CyArenaNode) + size;
@@ -672,18 +686,20 @@ static inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
 
 CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 {
-    CyArena *arena = (CyArena*)allocator;
+    CY_UNUSED(flags);
+
+    CyArena *arena = (CyArena*)allocator_data;
     void *ptr = NULL;
     switch(type) {
     case CY_ALLOCATION_ALLOC: {
         CyArenaNode *cur_node = arena->state.first_node;
-        u8 *buf = cur_node->buf; 
-        u8 *curr_ptr = buf + cur_node->offset;
-        intptr offset = (u8*)cy_align_ptr_forward(curr_ptr, align) - buf;
-        while (offset + size >= cur_node->size) {
-            // NOTE(cya): need more memory! (add new node to linked list)
+        u8 *buf = cur_node->buf;
+        u8 *end = cur_node->buf + cur_node->offset;
+        intptr aligned_offset = (u8*)cy_align_ptr_forward(end, align) - buf;
+        while (aligned_offset + size > cur_node->size) {
             if (cur_node->next == NULL) {
-                isize largest_node_size = arena->state.first_node->size; 
+                // NOTE(cya): need more memory! (add new node to linked list)
+                isize largest_node_size = arena->state.first_node->size;
                 isize new_size = largest_node_size * CY_ARENA_GROWTH_FACTOR;
                 if (size > new_size) {
                     new_size = size;
@@ -694,20 +710,19 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             }
 
             cur_node = cur_node->next;
-
             buf = cur_node->buf;
-            curr_ptr = buf + cur_node->offset;
-            offset = (u8*)cy_align_ptr_forward(curr_ptr, align) - buf;
+            end = cur_node->buf + cur_node->offset;
+            aligned_offset = (u8*)cy_align_ptr_forward(end, align) - buf;
         }
 
-        cur_node->prev_offset = offset;
-        cur_node->offset = offset + size;
+        cur_node->prev_offset = aligned_offset;
+        cur_node->offset = aligned_offset + size;
 
-        ptr = cur_node->buf + offset;
-    } break; 
+        ptr = buf + aligned_offset;
+    } break;
     case CY_ALLOCATION_FREE: {
         CY_ASSERT_MSG(false, "arenas don't support individual frees");
-    } break; 
+    } break;
     case CY_ALLOCATION_FREE_ALL: {
         CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
         while (next != NULL) {
@@ -718,49 +733,60 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 
         isize node_size = sizeof(CyArenaNode) + arena->state.first_node->size;
         cy_mem_set(arena->state.first_node, 0, node_size);
-    } break; 
+    } break;
     case CY_ALLOCATION_RESIZE: {
         CY_ASSERT(cy_is_power_of_two(align));
 
-        u8 *old_mem = old_mem;
-        if (old_mem == NULL || old_size == 0) {
-            return cy_alloc_align(arena->backing, size, align);
+        u8 *old_memory = old_mem;
+        if (old_memory == NULL || old_size == 0) {
+            return cy_alloc_align(cy_arena_allocator(arena), size, align);
         }
 
         CyArenaNode *cur_node = arena->state.first_node;
-        while (cur_node->next != NULL) cur_node = cur_node->next;
+        intptr prev_offset;
+        b32 found_node = false;
+        while (cur_node != NULL) {
+            prev_offset = cur_node->prev_offset;
+            if (cur_node->buf + prev_offset == old_memory) {
+                found_node = true;
+                break;
+            }
 
-        if (cur_node->buf + cur_node->prev_offset != old_mem) return NULL;
+            cur_node = cur_node->next;
+        }
+        if (!found_node) {
+            return NULL;
+        }
 
-        isize aligned_size = cy_align_forward(size, align);
-        uintptr aligned_offset = cy_align_forward(cur_node->offset, align);
-        u8 *new_mem = old_mem + aligned_offset;
-        if (new_mem + aligned_size < cur_node->buf + cur_node->size) {
-            cur_node->offset = aligned_offset + aligned_size;
+        intptr aligned_offset = cy_align_forward(prev_offset, align);
+        u8 *new_memory = cur_node->buf + aligned_offset;
+        if (new_memory + size < cur_node->buf + cur_node->size) {
+            intptr tmp_offset = cur_node->offset;
+            cur_node->offset = aligned_offset + size;
             if (cur_node->offset < cur_node->prev_offset + old_size) {
                 cy_mem_set(
                     cur_node->buf + cur_node->offset, 0,
-                    old_size - aligned_size
+                    old_size - size
                 );
             }
 
-            return (void*)new_mem;
+            cur_node->prev_offset = tmp_offset;
+            return new_memory;
         }
 
-        void *new_ptr = cy_alloc_align(arena->backing, size, align);
+        void *new_ptr = cy_alloc_align(cy_arena_allocator(arena), size, align);
         CY_VALIDATE_PTR(new_ptr);
 
         usize copy_size = old_size < size ? old_size : size;
-        cy_mem_move(new_ptr, old_mem, copy_size);
+        cy_mem_move(new_ptr, old_memory, copy_size);
         ptr = new_ptr;
-    } break; 
+    } break;
     }
 
     return ptr;
 }
 
-/* ---------- Stack Allocator Section ---------- */
-
+/* -------------------------Stack Allocator Section ------------------------- */
 // TODO(cya): restructure this to fit new allocator interface
 typedef struct StackNode {
     unsigned char *buf;
@@ -799,8 +825,8 @@ static inline Stack *stack_init(
     if (initial_size == 0) initial_size = CY_STACK_INIT_SIZE;
 
     if (backing_allocator == NULL && backing_deallocator == NULL) {
-        backing_allocator = page_alloc;
-        backing_deallocator = page_free;
+        // backing_allocator = page_alloc;
+        // backing_deallocator = page_free;
         initial_size = cy_align_forward(initial_size, CY_PAGE_SIZE);
     } else if (backing_allocator == NULL || backing_deallocator == NULL) {
         return NULL;
