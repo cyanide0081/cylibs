@@ -372,7 +372,6 @@ static inline char *cy_alloc_string(CyAllocator a, const char *str)
 
 #include <malloc.h>
 
-// TODO(cya): all the rest
 // NOTE(cya): for single items and arrays
 #define cy_alloc_item(allocator, Type) (Type*)cy_alloc(allocator, sizeof(Type))
 #define cy_alloc_array(allocator, Type, count) \
@@ -388,6 +387,7 @@ static CyAllocator cy_heap_allocator(void)
     };
 }
 
+// TODO(cya): implement a general-purpose heap allocator to replace malloc
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 {
     void *ptr = NULL;
@@ -474,6 +474,8 @@ static inline usize cy_calc_header_padding(
     #endif
 #endif
 
+
+// TODO(cya): restructure this to fit new allocator interface
 typedef struct PageChunk {
     usize size;  // Total size of allocation (including aligned meta-chunk)
     usize align; // Alignment (for tracking down the start of the allocation)
@@ -622,12 +624,6 @@ static inline CyAllocator cy_arena_allocator(CyArena *arena)
     };
 }
 
-/* TODO(cya):
- *  1. create an internal stripped-off linked-list implementation that inserts
- *     new nodes at the beginning of the list for better performance
- */
-
-/* Default initial size set to one page */
 #define CY_ARENA_INIT_SIZE     CY_PAGE_SIZE
 #define CY_ARENA_GROWTH_FACTOR 2.0
 
@@ -648,7 +644,6 @@ static inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
     };
 }
 
-// FIXME(cya): double-free bug happening here
 static inline void arena_deinit(CyArena *arena)
 {
     CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
@@ -765,6 +760,8 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 }
 
 /* ---------- Stack Allocator Section ---------- */
+
+// TODO(cya): restructure this to fit new allocator interface
 typedef struct StackNode {
     unsigned char *buf;
     usize size;
