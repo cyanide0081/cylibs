@@ -17,23 +17,22 @@ static void test_page_allocator(void)
     size_t txt_len = ftell(f);
     rewind(f);
 
-    CyPageInfo page_data = {0};
-    CyAllocator a = cy_page_allocator(&page_data);
+    CyAllocator a = cy_page_allocator();
 
     size_t txt_size = txt_len + 1;
     char *txt_buf = cy_alloc(a, txt_size);
     print_s("allocated page");
 
-    if ((uintptr_t)txt_buf % CY_DEFAULT_ALIGNMENT != 0) {
+    if ((uintptr)txt_buf % CY_DEFAULT_ALIGNMENT != 0) {
         print_e("returned memory is not properly aligned");
         TEST_FAIL();
     }
 
     print_s("validated memory alignment");
 
-    fread(txt_buf, sizeof(char), txt_len, f);
+    fread(txt_buf, sizeof(u8), txt_len, f);
     print_s("allocated message (%.2lfKB) (page size: %.2lfKB)",
-        txt_len / KB, page_data.size / KB);
+        txt_len / KB, cy_page_allocator_alloc_size(txt_buf) / KB);
 
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x80);
@@ -56,12 +55,13 @@ static void test_page_allocator(void)
         txt_buf = new_buf;
         txt_size = 0x100000;
         print_s("expanded page size (%.2lfkB)",
-            page_data.size / KB);
+            cy_page_allocator_alloc_size(txt_buf) / KB);
     }
     {
-        size_t val = 69;
-        cy_mem_set(txt_buf, (int)val, txt_size);
-        print_s("wrote [%zu] to page (%.2lfKB)", val, txt_size / KB);
+        u8 val = 69;
+        isize page_size = cy_page_allocator_alloc_size(txt_buf);
+        cy_mem_set(txt_buf, val, page_size);
+        print_s("wrote [%u] to page (%.2lfKB)", val, page_size / KB);
     }
 
     cy_free(a, txt_buf);

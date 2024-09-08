@@ -224,7 +224,6 @@ static void *cy_mem_zero(void *dst, usize bytes)
 #define CY_UNUSED(param) (void)(param)
 
 /* =============================== Allocators =============================== */
-
 typedef enum {
     CY_ALLOCATION_ALLOC,
     CY_ALLOCATION_FREE,
@@ -344,8 +343,12 @@ static inline void *cy_default_resize_align(
     return new_mem;
 }
 
-static inline void *cy_alloc_copy_align(CyAllocator a, const void *src, isize size, isize align)
-{
+static inline void *cy_alloc_copy_align(
+    CyAllocator a,
+    const void *src,
+    isize size,
+    isize align
+) {
     return cy_mem_copy(cy_alloc_align(a, size, align), src, size);
 }
 
@@ -354,8 +357,11 @@ static inline void *cy_alloc_copy(CyAllocator a, const void *src, isize size)
     return cy_alloc_copy_align(a, src, size, CY_DEFAULT_ALIGNMENT);
 }
 
-static inline char *cy_alloc_string_len(CyAllocator a, const char *str, isize len)
-{
+static inline char *cy_alloc_string_len(
+    CyAllocator a,
+    const char *str,
+    isize len
+) {
     char *res = cy_alloc_copy(a, str, len + 1);
     res[len] = '\0';
     return res;
@@ -505,18 +511,25 @@ static inline usize cy_calc_header_padding(
 #endif
 
 typedef struct {
-    void *data;
-    isize size;
-} CyPageInfo;
+    void *start; // Actual beginning of the region of pages
+    isize size;  // Total size of allocation (including aligned meta-chunk)
+} CyPageChunk;
 
 CyAllocatorProc cy_page_allocator_proc;
 
-static CyAllocator cy_page_allocator(CyPageInfo *page_data)
+static CyAllocator cy_page_allocator(void)
 {
     return (CyAllocator){
-        .data = page_data,
         .proc = cy_page_allocator_proc,
     };
+}
+
+// NOTE(cya): size of actual usable memory starting at *ptr
+static isize cy_page_allocator_alloc_size(void *ptr)
+{
+    CyPageChunk *chunk = (CyPageChunk*)ptr - 1;
+    intptr diff = (uintptr)ptr - (uintptr)chunk->start;
+    return chunk->size - diff;
 }
 
 #define CY_MIN(a, b) (a < b ? a : b)
@@ -526,77 +539,101 @@ static CyAllocator cy_page_allocator(CyPageInfo *page_data)
 
 CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 {
-    CY_UNUSED(old_size);
+    CY_UNUSED(allocator_data);
+    // NOTE(cya): shouldn't need to handle clear-to-zero flag
+    // since both VirtualAlloc and mmap clear the memory for us
     CY_UNUSED(flags);
 
-    CyPageInfo *page_info = (CyPageInfo*)allocator_data;
     void *ptr = NULL;
     switch (type) {
     case CY_ALLOCATION_ALLOC: {
         CY_ASSERT_MSG(size > 0, "page allocator: invalid allocation size");
-        // NOTE(cya): maybe this is too intrusive?
-        CY_ASSERT_MSG(page_info->data == NULL, "page allocator: memory leak");
 
-        isize alloc_size = cy_align_forward(size, CY_MAX(align, CY_PAGE_SIZE));
+        isize chunk_padding = sizeof(CyPageChunk) + align;
+        isize alloc_size = size + align;
+        isize total_size = cy_align_forward(
+            chunk_padding + alloc_size, CY_PAGE_SIZE
+        );
+
+        void *mem = NULL;
 #if defined(CY_OS_WINDOWS)
-        ptr = VirtualAlloc(
-            NULL, aligned_size,
+        mem = VirtualAlloc(
+            NULL, total_size,
             MEM_COMMIT | MEM_RESERVE,
             PAGE_READWRITE
         );
 #else
-        ptr = mmap(
-            NULL, alloc_size,
+        mem = mmap(
+            NULL, total_size,
             PROT_READ | PROT_WRITE,
             MAP_PRIVATE | MAP_ANONYMOUS,
             -1, 0
         );
 #endif
-        CY_VALIDATE_PTR(ptr);
-        CY_ASSERT(ptr == cy_align_ptr_forward(ptr, align));
+        CY_VALIDATE_PTR(mem);
 
-        page_info->data = ptr;
-        page_info->size = alloc_size;
+        CyPageChunk *chunk_start = (CyPageChunk*)
+            ((u8*)mem + chunk_padding - sizeof(*chunk_start));
+        *chunk_start = (CyPageChunk){
+            .start = mem,
+            .size = total_size,
+        };
+
+        ptr = (u8*)mem + chunk_padding;
+        CY_ASSERT(ptr == cy_align_ptr_forward(ptr, align));
     } break;
     case CY_ALLOCATION_FREE: {
+        CyPageChunk *chunk = (CyPageChunk*)old_mem - 1;
+        void *start = chunk->start;
+        isize total_size = chunk->size;
 #if defined(CY_OS_WINDOWS)
-        VirtualFree(old_mem, 0, MEM_RELEASE);
+        VirtualFree(start, 0, MEM_RELEASE);
 #else
-        munmap(old_mem, page_info->size);
+        munmap(start, total_size);
 #endif
     } break;
     case CY_ALLOCATION_FREE_ALL: {
         CY_ASSERT_MSG(false, "page allocator doesn't support free-all");
     } break;
     case CY_ALLOCATION_RESIZE: {
-        CY_ASSERT(page_info->data == old_mem);
+        // TODO(cya): test this resizing logic a bit more thoroughly
+        CyPageChunk *chunk = (CyPageChunk*)old_mem - 1;
+        void *cur_start = chunk->start;
+        isize chunk_padding = sizeof(*chunk) + align;
 
-        isize cur_size = page_info->size;
-        isize new_size = cy_align_forward(size, CY_MAX(align, CY_PAGE_SIZE));
-
-        if (new_size <= cur_size) {
-            isize size_to_free = cur_size - new_size;
-            u8 *region_to_free = (u8*)old_mem + new_size;
+        isize cur_total_size = chunk->size;
+        isize new_total_size = cy_align_forward(
+            chunk_padding + size + align, CY_PAGE_SIZE
+        );
+        if (new_total_size <= cur_total_size) {
+            isize size_to_free = cur_total_size - new_total_size;
+            if (size_to_free >= CY_PAGE_SIZE) {
+                u8 *region_to_free = (u8*)cur_start + new_total_size;
 
 #if defined(CY_OS_WINDOWS)
-            VirtualFree(region_to_free, size_to_free, MEM_DECOMMIT);
+                VirtualFree(region_to_free, size_to_free, MEM_DECOMMIT);
 #else
-            munmap(region_to_free, size_to_free);
+                munmap(region_to_free, size_to_free);
 #endif
 
-            page_info->size = new_size;
-            return old_mem;
+                CyPageChunk *new_chunk = (CyPageChunk*)
+                    cur_start + chunk_padding - sizeof(*new_chunk);
+                *new_chunk = (CyPageChunk){
+                    .start = cur_start,
+                    .size = new_total_size,
+                };
+            }
+
+            return cy_align_ptr_forward(old_mem, align);
         }
 
-        CyPageInfo new_info = {0};
-        CyAllocator a = cy_page_allocator(&new_info);
-        void *new_ptr = cy_alloc(a, new_size);
+        CyAllocator a = cy_page_allocator();
+        void *new_ptr = cy_alloc_align(a, size, align);
         CY_VALIDATE_PTR(new_ptr);
 
-        cy_mem_copy(new_ptr, old_mem, cur_size);
-        cy_free(cy_page_allocator(page_info), old_mem);
+        cy_mem_copy(new_ptr, old_mem, old_size);
+        cy_free(a, old_mem);
 
-        *page_info = new_info;
         ptr = new_ptr;
     } break;
     }
