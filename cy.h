@@ -69,6 +69,23 @@ typedef uint32_t u32;
 typedef uint64_t u64;
 #endif
 
+typedef float f32;
+typedef double f64;
+
+#if defined(CY_OS_UNIX)
+    #include <stddef.h>
+#endif
+
+typedef ptrdiff_t isize;
+typedef size_t usize;
+
+typedef intptr_t intptr;
+typedef uintptr_t uintptr;
+
+typedef i8 b8;
+typedef i16 b16;
+typedef i32 b32;
+
 #define U8_MIN 0U
 #define U8_MAX 0xFFU
 #define I8_MIN (-0x7F - 1)
@@ -88,20 +105,6 @@ typedef uint64_t u64;
 #define U64_MAX 0xFFFFFFFFFFFFFFFFULL
 #define I64_MIN (-0x7FFFFFFFFFFFFFFFLL - 1)
 #define I64_MAX 0x7FFFFFFFFFFFFFFFFLL
-
-#if defined(CY_OS_UNIX)
-    #include <stddef.h>
-#endif
-
-typedef ptrdiff_t isize;
-typedef size_t usize;
-
-typedef intptr_t intptr;
-typedef uintptr_t uintptr;
-
-typedef i8 b8;
-typedef i16 b16;
-typedef i32 b32;
 
 #define true (0 == 0)
 #define false (0 != 0)
@@ -768,8 +771,10 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             cy_free(arena->backing, cur_node);
         }
 
-        isize node_size = sizeof(CyArenaNode) + arena->state.first_node->size;
-        cy_mem_set(arena->state.first_node, 0, node_size);
+        CyArenaNode *first_node = arena->state.first_node;
+        cy_mem_set(first_node->buf, 0, first_node->size);
+        first_node->prev_offset = first_node->offset = 0;
+        first_node->next = NULL;
     } break;
     case CY_ALLOCATION_RESIZE: {
         CY_ASSERT(cy_is_power_of_two(align));

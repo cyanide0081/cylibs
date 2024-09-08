@@ -131,12 +131,17 @@ static void test_arena_allocator(void)
     }
     {
         const char *str = "basolutely.";
-        size_t str_len = strlen(str);
-        char *str_buf = cy_alloc_string_len(a, str, str_len);
+        char *str_buf = cy_alloc_string(a, str);
         print_s(
             "allocated string into arena (str_buf: '%.*s')",
-            (int)str_len, str_buf
+            (i32)cy_cstring_len(str_buf), str_buf
         );
+    }
+    {
+        cy_free_all(a);
+        CY_ASSERT(arena.state.first_node->offset == 0);
+        f64 size = arena.state.first_node->size / KB;
+        print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
 
     arena_deinit(&arena);
