@@ -107,6 +107,12 @@ static void test_arena_allocator(void)
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
     {
+        cy_free_all(a);
+        CY_ASSERT(arena.state.first_node->offset == 0);
+        f64 size = arena.state.first_node->size / KB;
+        print_s("freed whole arena (Available size: %.2lfKB)", size);
+    }
+    {
         size_t shrunk_size = expanded_size / 4;
         txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
         if (txt_buf == NULL) {
@@ -148,10 +154,25 @@ static void test_arena_allocator(void)
     print_s("deinitialized arena");
 }
 
+static void test_cy_strings(void)
+{
+    printf("%sTesting CyStrings...%s\n", VT_BOLD, VT_RESET);
+
+    CyArena arena = cy_arena_init(cy_heap_allocator(), 0x1000);
+    CyAllocator a = cy_arena_allocator(&arena);
+
+    {
+        CyString s = cy_string_create(a, "Hello, World!");
+        CY_ASSERT(cy_string_len(s) == 12);
+    }
+
+}
+
 int main(void)
 {
     test_page_allocator();
     test_arena_allocator();
+    test_cy_strings();
 
     return exit_code;
 }

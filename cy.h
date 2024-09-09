@@ -33,6 +33,52 @@
     #error Unsupported OS
 #endif
 
+#ifndef CY_STATIC_ASSERT
+    // NOTE(cya): because C macro expansion bizarreness
+    #define CY_STATIC_ASSERT_INTERNAL_EX(cond, line) \
+        typedef char STATIC_ASSERTION_FAILED_AT_LINE_##line[!!(cond) * 2 - 1]
+    #define CY_STATIC_ASSERT_INTERNAL(cond, line) \
+        CY_STATIC_ASSERT_INTERNAL_EX(cond, line)
+    #define CY_STATIC_ASSERT(cond) CY_STATIC_ASSERT_INTERNAL(cond, __LINE__)
+#endif
+
+#ifndef NDEBUG
+    #define CY_DEBUG 1
+#endif
+
+#ifndef CY_DEBUG_TRAP
+    #if defined(_MSC_VER)
+        #if _MSC_VER < 1300
+            #define CY_DEBUG_TRAP() __asm int 3
+        #else
+            #define CY_DEBUG_TRAP() __debugbreak()
+        #endif
+    #else
+        #define CY_DEBUG_TRAP() __builtin_trap()
+    #endif
+#endif
+
+#ifndef CY_ASSERT_MSG
+    #if defined(CY_DEBUG)
+        #define CY_ASSERT_MSG(cond, ...) { \
+            if (!(cond)) { \
+                cy_handle_assertion( \
+                    "Assertion failed",#cond, \
+                    __FILE__, (i64)__LINE__, __VA_ARGS__ \
+                ); \
+                CY_DEBUG_TRAP(); \
+            } \
+        } (void)0
+    #else
+        #define CY_ASSERT_MSG(cond, ...) (void)(cond)
+    #endif
+#endif
+
+#ifndef CY_ASSERT
+#define CY_ASSERT(cond) CY_ASSERT_MSG(cond, NULL)
+#define CY_ASSERT_NOT_NULL(ptr) CY_ASSERT(ptr != NULL)
+#endif
+
 /* ================================= Types ================================== */
 #ifdef _MSC_VER
     #if _MSC_VER < 1300
@@ -72,6 +118,9 @@ typedef uint64_t u64;
 typedef float f32;
 typedef double f64;
 
+CY_STATIC_ASSERT(sizeof(f32) == 4);
+CY_STATIC_ASSERT(sizeof(f64) == 8);
+
 #if defined(CY_OS_UNIX)
     #include <stddef.h>
 #endif
@@ -81,6 +130,8 @@ typedef size_t usize;
 
 typedef intptr_t intptr;
 typedef uintptr_t uintptr;
+
+CY_STATIC_ASSERT(sizeof(intptr) == sizeof(uintptr));
 
 typedef i8 b8;
 typedef i16 b16;
@@ -119,54 +170,6 @@ typedef i32 Rune; // Unicode codepoint
 #define cy_global static
 #define cy_internal static
 #define cy_persist static
-
-#ifndef CY_STATIC_ASSERT
-    // NOTE(cya): because C macro expansion bizarreness
-    #define CY_STATIC_ASSERT_INTERNAL_EX(cond, line) \
-        typedef char STATIC_ASSERTION_FAILED_AT_LINE_##line[!!(cond) * 2 - 1]
-    #define CY_STATIC_ASSERT_INTERNAL(cond, line) \
-        CY_STATIC_ASSERT_INTERNAL_EX(cond, line)
-    #define CY_STATIC_ASSERT(cond) CY_STATIC_ASSERT_INTERNAL(cond, __LINE__)
-#endif
-
-CY_STATIC_ASSERT(true); // sanity check
-
-#ifndef NDEBUG
-    #define CY_DEBUG 1
-#endif
-
-#ifndef CY_ASSERT_MSG
-    #if defined(CY_DEBUG)
-        #define CY_ASSERT_MSG(cond, ...) { \
-            if (!(cond)) { \
-                cy_handle_assertion( \
-                    "Assertion failed",#cond, \
-                    __FILE__, (i64)__LINE__, __VA_ARGS__ \
-                ); \
-                CY_DEBUG_TRAP(); \
-            } \
-        } (void)0
-    #else
-        #define CY_ASSERT_MSG(cond, ...) (void)(cond)
-    #endif
-#endif
-
-#ifndef CY_ASSERT
-#define CY_ASSERT(cond) CY_ASSERT_MSG(cond, NULL)
-#define CY_ASSERT_NOT_NULL(ptr) CY_ASSERT(ptr != NULL)
-#endif
-
-#ifndef CY_DEBUG_TRAP
-    #if defined(_MSC_VER)
-        #if _MSC_VER < 1300
-            #define CY_DEBUG_TRAP() __asm int 3
-        #else
-            #define CY_DEBUG_TRAP() __debugbreak()
-        #endif
-    #else
-        #define CY_DEBUG_TRAP() __builtin_trap()
-    #endif
-#endif
 
 #include <stdio.h>   // for optional logging
 #include <stdarg.h>  // va_args
@@ -346,6 +349,19 @@ static inline void *cy_default_resize_align(
     return new_mem;
 }
 
+static inline void *cy_default_resize(
+    CyAllocator a,
+    void *old_mem,
+    isize old_size,
+    isize new_size
+) {
+    return cy_default_resize_align(
+        a, old_mem,
+        old_size, new_size,
+        CY_DEFAULT_ALIGNMENT
+    );
+}
+
 static inline void *cy_alloc_copy_align(
     CyAllocator a,
     const void *src,
@@ -371,9 +387,9 @@ static inline char *cy_alloc_string_len(
 }
 
 // TODO(cya): figure out this sorcery
-#define CY__ONES ((usize)-1 / U8_MAX)
-#define CY__HIGHS (CY__ONES * (U8_MAX / 2 + 1))
-#define CY__HAS_ZERO_BYTE(word) !!(((word) - CY__ONES) & ~(word) & CY__HIGHS)
+#define CY__LO_ONES ((usize)-1 / U8_MAX)
+#define CY__HI_ONES (CY__LO_ONES * (U8_MAX / 2 + 1))
+#define CY__HAS_ZERO_BYTE(n) !!(((n) - CY__LO_ONES) & ~(n) & CY__HI_ONES)
 
 static inline isize cy_cstring_len(const char *str)
 {
@@ -421,7 +437,10 @@ static CyAllocator cy_heap_allocator(void)
     };
 }
 
-// TODO(cya): implement a general-purpose heap allocator to replace malloc
+#ifndef CY_OS_WINDOWS
+    #define _aligned_malloc(s, a) memalign(a, s)
+#endif
+
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 {
     CY_UNUSED(allocator_data);
@@ -432,7 +451,7 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 #if 0
         cy_printf_err("Allocated %zu bytes\n", size);
 #endif
-        ptr = memalign(align, size);
+        ptr = _aligned_malloc(size, align);
         if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
             cy_mem_zero(ptr, size);
         }
@@ -645,7 +664,6 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 }
 
 /* ------------------------ Arena Allocator Section ------------------------- */
-// TODO(cya): add init_from_buffer proc to this and other allocators
 typedef struct CyArenaNode {
     u8 *buf;                  // actual arena memory
     isize size;               // size of the buffer in bytes
@@ -676,6 +694,21 @@ static inline CyAllocator cy_arena_allocator(CyArena *arena)
 #define CY_ARENA_INIT_SIZE     CY_PAGE_SIZE
 #define CY_ARENA_GROWTH_FACTOR 2.0
 
+static inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
+{
+    isize node_padding = sizeof(CyArenaNode) + CY_DEFAULT_ALIGNMENT;
+    isize new_node_size = node_padding + size;
+    CyArenaNode *new_node = cy_alloc(arena->backing, new_node_size);
+    CY_VALIDATE_PTR(new_node);
+
+    new_node->buf = cy_align_ptr_forward(new_node, CY_DEFAULT_ALIGNMENT);
+    new_node->size = size;
+    new_node->next = arena->state.first_node;
+    arena->state.first_node = new_node;
+
+    return new_node;
+}
+
 static inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
 {
     CY_ASSERT_NOT_NULL(backing.proc);
@@ -685,18 +718,9 @@ static inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
         initial_size = default_size;
     }
 
-    isize aligned_node_size = cy_align_forward(
-        sizeof(CyArenaNode),
-        CY_DEFAULT_ALIGNMENT
-    );
-    isize first_node_size = aligned_node_size + initial_size;
-    CyArenaNode *first_node = cy_alloc(backing, first_node_size);
-    first_node->buf = (u8*)first_node + aligned_node_size;
-    first_node->size = initial_size;
-
     return (CyArena){
         .backing = backing,
-        .state.first_node = first_node,
+        .state.first_node = cy_arena_insert_node(&arena, initial_size),
     };
 }
 
@@ -710,20 +734,6 @@ static inline void arena_deinit(CyArena *arena)
     }
 }
 
-static inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
-{
-    isize new_node_size = sizeof(CyArenaNode) + size;
-    CyArenaNode *new_node = cy_alloc(arena->backing, new_node_size);
-    CY_VALIDATE_PTR(new_node);
-
-    new_node->buf = (u8*)(new_node + 1);
-    new_node->size = size;
-    new_node->next = arena->state.first_node;
-    arena->state.first_node = new_node;
-
-    return new_node;
-}
-
 CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 {
     CY_UNUSED(flags);
@@ -732,33 +742,36 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
     void *ptr = NULL;
     switch(type) {
     case CY_ALLOCATION_ALLOC: {
+        isize req_size = size + align;
         CyArenaNode *cur_node = arena->state.first_node;
-        u8 *buf = cur_node->buf;
         u8 *end = cur_node->buf + cur_node->offset;
-        intptr aligned_offset = (u8*)cy_align_ptr_forward(end, align) - buf;
-        while (aligned_offset + size > cur_node->size) {
+        u8 *aligned_end = cy_align_ptr_forward(end, align);
+        while (aligned_end + size > cur_node->buf + cur_node->size) {
             if (cur_node->next == NULL) {
                 // NOTE(cya): need more memory! (add new node to linked list)
                 isize largest_node_size = arena->state.first_node->size;
                 isize new_size = largest_node_size * CY_ARENA_GROWTH_FACTOR;
-                if (size > new_size) {
-                    new_size = size;
-                }
 
-                CyArenaNode *new_node = cy_arena_insert_node(arena, new_size);
-                return new_node->buf;
+                cur_node = cy_arena_insert_node(
+                    arena, CY_MAX(new_size, req_size)
+                );
+                CY_VALIDATE_PTR(cur_node);
+                end = cur_node->buf + cur_node->offset;
+                aligned_end = cy_align_ptr_forward(end, align);
+                break;
             }
 
             cur_node = cur_node->next;
-            buf = cur_node->buf;
             end = cur_node->buf + cur_node->offset;
-            aligned_offset = (u8*)cy_align_ptr_forward(end, align) - buf;
+            aligned_end = cy_align_ptr_forward(end, align);
         }
+
+        isize aligned_offset = aligned_end - cur_node->buf;
 
         cur_node->prev_offset = aligned_offset;
         cur_node->offset = aligned_offset + size;
 
-        ptr = buf + aligned_offset;
+        ptr = aligned_end;
     } break;
     case CY_ALLOCATION_FREE: {
         CY_ASSERT_MSG(false, "arenas don't support individual frees");
@@ -819,8 +832,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         void *new_ptr = cy_alloc_align(cy_arena_allocator(arena), size, align);
         CY_VALIDATE_PTR(new_ptr);
 
-        usize copy_size = old_size < size ? old_size : size;
-        cy_mem_move(new_ptr, old_memory, copy_size);
+        cy_mem_move(new_ptr, old_memory, CY_MIN(old_size, size));
         ptr = new_ptr;
     } break;
     }
@@ -829,7 +841,6 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 }
 
 /* -------------------------Stack Allocator Section ------------------------- */
-// TODO(cya): restructure this to fit new allocator interface
 typedef struct StackNode {
     unsigned char *buf;
     usize size;
@@ -1053,17 +1064,111 @@ void stack_deinit(Stack *stack)
     stack->free(stack);
 }
 
+
+/* TODO(cya):
+ * add init_from_buffer proc to arena and other 'fixed' allocators
+ * repurpose stack allocator
+ * pool allocator
+ * buddy allocator
+ * freelist allocator
+ * general-purpose heap allocator to replace malloc
+ */
+
 /* ================================ Strings ================================= */
-typedef struct {
-    u8 *data;
-    isize len;
-} String;
+typedef char *CyString;
 
 typedef struct {
-    u8 *data;
+    CyAllocator alloc;
     isize len;
     isize cap;
-    CyAllocator allocator;
-} StringBuilder;
+} CyStringHeader;
+
+#define CY_STRING_HEADER(str) ((CyStringHeader*)(str) - 1)
+
+static inline isize cy_string_len(CyString str)
+{
+    if (str == NULL) {
+        return 0;
+    }
+
+    return CY_STRING_HEADER(str)->len;
+}
+
+static inline isize cy_string_cap(CyString str)
+{
+    if (str == NULL) {
+        return 0;
+    }
+
+    return CY_STRING_HEADER(str)->cap;
+}
+
+static CyString cy_string_create_reserve(CyAllocator a, isize cap)
+{
+    isize header_size = sizeof(CyStringHeader);
+    isize total_size = header_size + cap + 1;
+    void *ptr = cy_alloc(a, total_size);
+    CY_VALIDATE_PTR(ptr);
+
+    cy_mem_zero(ptr, total_size);
+
+    CyStringHeader *header = ptr;
+    *header = (CyStringHeader){
+        .alloc = a,
+        .len = 0,
+        .cap = cap,
+    };
+
+    return (CyString)ptr + header_size;
+}
+
+static CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
+{
+    isize header_size = sizeof(CyStringHeader);
+    isize total_size = header_size + len + 1;
+    void *ptr = cy_alloc(a, total_size);
+    CY_VALIDATE_PTR(ptr);
+
+    if (str == NULL) {
+        cy_mem_zero(ptr, total_size);
+    }
+
+    CyStringHeader *header = ptr;
+    *header = (CyStringHeader){
+        .alloc = a,
+        .len = len,
+        .cap = len,
+    };
+
+    CyString string = (CyString)ptr + header_size;
+    if (len > 0 && str != NULL) {
+        cy_mem_copy(string, str, len);
+    }
+
+    string[len] = '\0';
+    return string;
+}
+
+static CyString cy_string_create(CyAllocator a, const char *str)
+{
+    return cy_string_create_len(a, str, cy_cstring_len(str));
+}
+
+static void cy_string_free(CyString str)
+{
+    if (str != NULL) {
+        cy_free(CY_STRING_HEADER(str)->alloc, str);
+    }
+}
+
+typedef struct {
+    isize len;
+    char *str;
+} CyStringView;
+
+/* TODO(cya):
+ * figure out string views
+ * more CyString procedures
+*/
 
 #endif /* _CY_H */
