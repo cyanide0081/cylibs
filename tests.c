@@ -163,7 +163,7 @@ static void test_cy_strings(void)
 
     {
         CyString s = cy_string_create(a, "Hello, World!");
-        CY_ASSERT(cy_string_len(s) == 12);
+        CY_ASSERT(cy_string_len(s) == 13);
     }
 
 }
