@@ -161,11 +161,16 @@ static void test_cy_strings(void)
     CyArena arena = cy_arena_init(cy_heap_allocator(), 0x1000);
     CyAllocator a = cy_arena_allocator(&arena);
 
-    {
-        CyString s = cy_string_create(a, "Hello, World!");
-        CY_ASSERT(cy_string_len(s) == 13);
-    }
+    isize len = 13;
+    CyString s = cy_string_create(a, "Hello, World!");
+    CY_ASSERT_NOT_NULL(s);
+    CY_ASSERT(cy_string_len(s) == len);
+    CY_ASSERT(cy_string_cap(s) == len);
 
+    print_s("created new string '%s'", s);
+
+    cy_free_all(a);
+    print_s("freed all strings");
 }
 
 int main(void)

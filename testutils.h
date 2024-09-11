@@ -1,6 +1,8 @@
 #ifndef _TEST_UTILS_H
 #define _TEST_UTILS_H
 
+#include <errno.h>
+
 #define KB 1024.0
 
 #define VT_BOLD "\x1B[1m"

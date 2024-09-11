@@ -226,6 +226,46 @@ CY_DEF void *cy_mem_zero(void *dst, usize bytes)
 #define CY_BIT(n) (1 << (n))
 #define CY_UNUSED(param) (void)(param)
 
+
+CY_DEF inline b8 cy_is_power_of_two(isize n)
+{
+    return (n & (n - 1)) == 0;
+}
+
+CY_DEF inline isize cy_align_forward(isize size, isize align)
+{
+    CY_ASSERT(align > 0 && cy_is_power_of_two(align));
+
+    isize mod = size & (align - 1);
+    return mod ? size + align - mod : size;
+}
+
+CY_DEF inline void *cy_align_ptr_forward(void *ptr, isize align)
+{
+    return (void*)cy_align_forward((isize)ptr, align);
+}
+
+/* Aligns a pointer forward accounting for both the size
+ * of a header and the alignment */
+CY_DEF inline usize cy_calc_header_padding(
+    uintptr ptr,
+    usize align,
+    usize header_size
+) {
+    CY_ASSERT(cy_is_power_of_two(align));
+
+    uintptr a = (uintptr)align;
+    uintptr mod = ptr & (a - 1);
+    uintptr padding = mod ? a - mod : 0;
+    if (padding < (uintptr)header_size) {
+        uintptr needed_space = header_size - padding;
+        padding += (needed_space & (a - 1)) ?
+            a * (needed_space / a + 1) : a * (needed_space / a);
+    }
+
+    return (usize)padding;
+}
+
 /* =============================== Allocators =============================== */
 typedef enum {
     CY_ALLOCATION_ALLOC,
@@ -388,6 +428,11 @@ CY_DEF inline char *cy_alloc_string_len(
 #define CY__HI_ONES (CY__LO_ONES * (U8_MAX / 2 + 1))
 #define CY__HAS_ZERO_BYTE(n) !!(((n) - CY__LO_ONES) & ~(n) & CY__HI_ONES)
 
+#define CY_MIN(a, b) (a < b ? a : b)
+#define CY_MAX(a, b) (a > b ? a : b)
+
+#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
+
 CY_DEF inline isize cy_cstring_len(const char *str)
 {
     if (str == NULL) {
@@ -435,11 +480,25 @@ CY_DEF CyAllocator cy_heap_allocator(void)
 }
 
 #ifdef CY_OS_WINDOWS
-    #define malloc_align _aligned_malloc
-    #define free_align _aligned_free
+    #define malloc_align(s, a) _aligned_malloc(s, a)
+    #define realloc_align(alloc, mem, old_size, new_size, align) \
+        _aligned_realloc(mem, new_size, align)
+    #define free_align(p, a) _aligned_free(p)
 #else
-    #define malloc_align(s, a) memalign(a, s)
-    #define free_align free
+extern int posix_memalign(void **, size_t, size_t);
+
+void *malloc_align(isize size, isize align)
+{
+    void *ptr = NULL;
+    if (posix_memalign(&ptr, align, size) != 0) {
+        return NULL;
+    }
+
+    return ptr;
+}
+
+    #define realloc_align cy_default_resize_align
+    #define free_align(p, a) free(p)
 #endif
 
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
@@ -458,17 +517,19 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
         }
     } break;
     case CY_ALLOCATION_FREE: {
-        free_align(old_mem);
+        free_align(old_mem, align);
     } break;
     case CY_ALLOCATION_FREE_ALL: {
         CY_ASSERT_MSG(false, "heap allocator doesn't support free-all");
     } break;
     case CY_ALLOCATION_RESIZE: {
-        ptr = cy_default_resize_align(
-            cy_heap_allocator(),
-            old_mem, old_size,
-            size, align
+        void *new_ptr = realloc_align(
+            cy_heap_allocator(), old_mem,
+            old_size, size,
+            align
         );
+        CY_VALIDATE_PTR(new_ptr);
+        ptr = new_ptr;
     } break;
     }
 
@@ -477,45 +538,6 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 
 #define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
 #define cy_heap_free(ptr) cy_free(cy_heap_allocator(), ptr)
-
-CY_DEF inline b8 cy_is_power_of_two(isize n)
-{
-    return (n & (n - 1)) == 0;
-}
-
-CY_DEF inline isize cy_align_forward(isize size, isize align)
-{
-    CY_ASSERT(align > 0 && cy_is_power_of_two(align));
-
-    isize mod = size & (align - 1);
-    return mod ? size + align - mod : size;
-}
-
-CY_DEF inline void *cy_align_ptr_forward(void *ptr, isize align)
-{
-    return (void*)cy_align_forward((isize)ptr, align);
-}
-
-/* Aligns a pointer forward accounting for both the size
- * of a header and the alignment */
-CY_DEF inline usize cy_calc_header_padding(
-    uintptr ptr,
-    usize align,
-    usize header_size
-) {
-    CY_ASSERT(cy_is_power_of_two(align));
-
-    uintptr a = (uintptr)align;
-    uintptr mod = ptr & (a - 1);
-    uintptr padding = mod ? a - mod : 0;
-    if (padding < (uintptr)header_size) {
-        uintptr needed_space = header_size - padding;
-        padding += (needed_space & (a - 1)) ?
-            a * (needed_space / a + 1) : a * (needed_space / a);
-    }
-
-    return (usize)padding;
-}
 
 /* ------------------------- Page Allocator Section ------------------------- */
 #if defined(CY_OS_WINDOWS)
@@ -554,11 +576,6 @@ CY_DEF isize cy_page_allocator_alloc_size(void *ptr)
     intptr diff = (uintptr)ptr - (uintptr)chunk->start;
     return chunk->size - diff;
 }
-
-#define CY_MIN(a, b) (a < b ? a : b)
-#define CY_MAX(a, b) (a > b ? a : b)
-
-#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
 CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 {
@@ -720,10 +737,9 @@ CY_DEF inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
         initial_size = default_size;
     }
 
-    CyArena arena = {
-        .backing = backing,
-        .state.first_node = cy_arena_insert_node(&arena, initial_size),
-    };
+    CyArena arena = {0};
+    arena.backing = backing;
+    arena.state.first_node = cy_arena_insert_node(&arena, initial_size);
     return arena;
 }
 
@@ -835,7 +851,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         void *new_ptr = cy_alloc_align(cy_arena_allocator(arena), size, align);
         CY_VALIDATE_PTR(new_ptr);
 
-        // cy_mem_move(new_ptr, old_memory, CY_MIN(old_size, size));
+        cy_mem_move(new_ptr, old_memory, CY_MIN(old_size, size));
         ptr = new_ptr;
     } break;
     }

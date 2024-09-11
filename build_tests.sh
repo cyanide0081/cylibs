@@ -3,7 +3,7 @@
 FLAGS="-g -std=c99 -pedantic -Wall -Wextra"
 
 set -xe
-cc -o tests tests.c $FLAGS
+clang -o tests tests.c $FLAGS
 set +xe
 echo
 
