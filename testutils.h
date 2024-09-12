@@ -13,11 +13,17 @@
 #define SP "[" VT_FG_GREEN "🗸" VT_RESET "] "
 #define EP "[" VT_FG_RED "🗙" VT_RESET "] "
 
-#define TEST_FAIL() \
-    exit_code = 1; \
-    return
-
 #define print_s(...) printf(SP "Success: " __VA_ARGS__); putchar('\n')
 #define print_e(...) printf(EP "Failure: " __VA_ARGS__); putchar('\n')
+
+#define TEST_ASSERT(cond, ...) { \
+    if (!(cond)) { \
+        print_e(__VA_ARGS__); \
+        exit_code = -1; \
+        return; \
+    } \
+} (void)0
+
+#define TEST_ASSERT_NOT_NULL(ptr, ...) TEST_ASSERT((ptr) != NULL, __VA_ARGS__)
 
 #endif /* _TEST_UTILS_H */

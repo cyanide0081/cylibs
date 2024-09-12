@@ -8,10 +8,7 @@ static void test_page_allocator(void)
     printf("%sTesting Page Allocator...%s\n", VT_BOLD, VT_RESET);
 
     FILE *f = fopen("sample.txt", "r");
-    if (f == NULL) {
-        print_e("unable to open file: %s", strerror(errno));
-        TEST_FAIL();
-    }
+    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
 
     fseek(f, 0, SEEK_END);
     size_t txt_len = ftell(f);
@@ -23,11 +20,10 @@ static void test_page_allocator(void)
     char *txt_buf = cy_alloc(a, txt_size);
     print_s("allocated page");
 
-    if ((uintptr)txt_buf % CY_DEFAULT_ALIGNMENT != 0) {
-        print_e("returned memory is not properly aligned");
-        TEST_FAIL();
-    }
-
+    TEST_ASSERT(
+        (uintptr)txt_buf % CY_DEFAULT_ALIGNMENT == 0,
+        "returned memory is not properly aligned"
+    );
     print_s("validated memory alignment");
 
     fread(txt_buf, sizeof(u8), txt_len, f);
@@ -36,10 +32,9 @@ static void test_page_allocator(void)
 
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x80);
-        if (new_buf == NULL) {
-            print_e("unable to shrink page size: %s", strerror(errno));
-            TEST_FAIL();
-        }
+        TEST_ASSERT_NOT_NULL(
+            new_buf, "unable to shrink page size: %s", strerror(errno)
+        );
 
         txt_buf = new_buf;
         txt_size = 0x80;
@@ -47,10 +42,9 @@ static void test_page_allocator(void)
     }
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x100000);
-        if (new_buf == NULL) {
-            print_e("unable to expand page size: %s", strerror(errno));
-            TEST_FAIL();
-        }
+        TEST_ASSERT_NOT_NULL(
+            new_buf, "unable to expand page size: %s", strerror(errno)
+        );
 
         txt_buf = new_buf;
         txt_size = 0x100000;
@@ -74,10 +68,7 @@ static void test_arena_allocator(void)
     printf("%sTesting Arena Allocator...%s\n", VT_BOLD, VT_RESET);
 
     FILE *f = fopen("sample.txt", "r");
-    if (f == NULL) {
-        print_e("unable to open file: %s", strerror(errno));
-        TEST_FAIL();
-    }
+    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
 
     fseek(f, 0, SEEK_END);
     isize txt_len = ftell(f);
@@ -99,32 +90,29 @@ static void test_arena_allocator(void)
     isize expanded_size = txt_size * 2;
     {
         txt_buf = cy_resize(a, txt_buf, txt_size, expanded_size);
-        if (txt_buf == NULL) {
-            print_e("unable to expand buffer in arena");
-            TEST_FAIL();
-        }
+        TEST_ASSERT_NOT_NULL(txt_buf, "unable to expand buffer in arena");
 
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
     {
         cy_free_all(a);
-        CY_ASSERT(arena.state.first_node->offset == 0);
+        TEST_ASSERT(
+            arena.state.first_node->offset == 0, "unexpected arena offset"
+        );
         f64 size = arena.state.first_node->size / KB;
         print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
     {
         size_t shrunk_size = expanded_size / 4;
         txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
-        if (txt_buf == NULL) {
-            print_e("unable to shrink buffer in arena");
-            TEST_FAIL();
-        }
+        TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in arena");
 
         print_s("shrunk message buffer (%.2lfKB)", shrunk_size / KB);
     }
     {
         CyArenaNode *first_node = arena.state.first_node;
-        while (first_node->offset < first_node->size) (void)cy_alloc_align(a, 0x1, 1);
+        while (first_node->offset < first_node->size)
+            (void)cy_alloc_align(a, 0x1, 1);
 
         print_s("exhausted arena (ofs: %zu, size: %zu)",
             first_node->offset, first_node->size);
@@ -140,12 +128,14 @@ static void test_arena_allocator(void)
         char *str_buf = cy_alloc_string(a, str);
         print_s(
             "allocated string into arena (str_buf: '%.*s')",
-            (i32)cy_cstring_len(str_buf), str_buf
+            (i32)cy_str_len(str_buf), str_buf
         );
     }
     {
         cy_free_all(a);
-        CY_ASSERT(arena.state.first_node->offset == 0);
+        TEST_ASSERT(
+            arena.state.first_node->offset == 0, "unexpected arena offset"
+        );
         f64 size = arena.state.first_node->size / KB;
         print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
@@ -162,12 +152,41 @@ static void test_cy_strings(void)
     CyAllocator a = cy_arena_allocator(&arena);
 
     isize len = 13;
-    CyString s = cy_string_create(a, "Hello, World!");
-    CY_ASSERT_NOT_NULL(s);
-    CY_ASSERT(cy_string_len(s) == len);
-    CY_ASSERT(cy_string_cap(s) == len);
+    CyString str = cy_string_create(a, "Hello, World!");
+    TEST_ASSERT_NOT_NULL(str, "string creation failed");
+    TEST_ASSERT(cy_string_len(str) == len, "unexpected string length");
+    TEST_ASSERT(cy_string_cap(str) == len, "unexpected string capacity");
 
-    print_s("created new string '%s'", s);
+    print_s("created new string '%s'", str);
+
+    const char *other = "我爱你";
+    str = cy_string_appendc(str, " ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append string");
+    str = cy_string_appendc(str, other);
+    TEST_ASSERT_NOT_NULL(str, "unable to append string");
+    TEST_ASSERT(
+        cy_string_len(str) == len + 1 + cy_str_len(other),
+        "unexpected string length difference"
+    );
+
+    print_s("appended to string, result: '%s'", str);
+
+    CyString dup = cy_string_dup(a, str);
+    TEST_ASSERT_NOT_NULL(dup, "string duplication failed");
+    TEST_ASSERT(
+        cy_string_are_equal(str, dup),
+        "duplicated string is not equal to source"
+    );
+
+    print_s("validated string equality");
+
+    isize old_len = cy_string_len(str);
+    str = cy_string_appendc(str, " \t\t   ");
+    str = cy_string_trim(str, " \t");
+    TEST_ASSERT_NOT_NULL(str, "unable to trim string");
+    TEST_ASSERT(cy_string_len(str) == old_len, "incorrectly trimmed string: '%s'", str);
+
+    print_s("trimmed trailing whitespace from string");
 
     cy_free_all(a);
     print_s("freed all strings");

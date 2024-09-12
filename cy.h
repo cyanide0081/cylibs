@@ -33,6 +33,17 @@
     #error Unsupported OS
 #endif
 
+#if defined(_WIN64) || defined(__x86_64__) || defined(_M_X64) || \
+    defined(__64BIT__) || defined(__powerpc64__) || defined(__ppc64__)
+    #ifndef CY_ARCH_64_BIT
+        #define CY_ARCH_64_BIT 1
+    #endif
+#else
+    #ifndef CY_ARCH_32_BIT
+        #define CY_ARCH_32_BIT 1
+    #endif
+#endif
+
 #ifndef CY_STATIC_ASSERT
     // NOTE(cya): because C macro expansion bizarreness
     #define CY_STATIC_ASSERT_INTERNAL_EX(cond, line) \
@@ -87,19 +98,7 @@
 
 
 /* ================================= Types ================================== */
-#ifdef _MSC_VER
-typedef __INT8_TYPE__ i8;
-typedef __INT16_TYPE__ i16;
-typedef __INT32_TYPE__ i32;
-
-typedef __UINT8_TYPE__ u8;
-typedef __UINT16_TYPE__ u16;
-typedef __UINT32_TYPE__ u32;
-
-typedef __INT64_TYPE__ i64;
-typedef __UINT64_TYPE__ u64;
-#else
-    #include <stdint.h>
+#include <stdint.h>
 
 typedef int8_t i8;
 typedef int16_t i16;
@@ -110,7 +109,6 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
-#endif
 
 typedef float f32;
 typedef double f64;
@@ -125,6 +123,8 @@ CY_STATIC_ASSERT(sizeof(f64) == 8);
 typedef ptrdiff_t isize;
 typedef size_t usize;
 
+CY_STATIC_ASSERT(sizeof(isize) == sizeof(usize));
+
 typedef intptr_t intptr;
 typedef uintptr_t uintptr;
 
@@ -134,6 +134,10 @@ typedef i8 b8;
 typedef i16 b16;
 typedef i32 b32;
 
+#define true (0 == 0)
+#define false (0 != 0)
+
+/* --------------------------------- Limits --------------------------------- */
 #define U8_MIN 0U
 #define U8_MAX 0xFFU
 #define I8_MIN (-0x7F - 1)
@@ -154,10 +158,28 @@ typedef i32 b32;
 #define I64_MIN (-0x7FFFFFFFFFFFFFFFLL - 1)
 #define I64_MAX 0x7FFFFFFFFFFFFFFFFLL
 
-#define true (0 == 0)
-#define false (0 != 0)
+#define F32_MIN 1.17549435e-38F
+#define F32_MAX 3.40282347e+38F
+
+#define F64_MIN 2.2250738585072014e-308
+#define F64_MAX 1.7976931348623157e+308
+
+#if defined(CY_ARCH_64_BIT)
+    #define ISIZE_MIN I64_MIN
+    #define ISIZE_MAX I64_MAX
+
+    #define USIZE_MIN U64_MIN
+    #define USIZE_MAX U64_MAX
+#else
+    #define ISIZE_MIN I32_MIN
+    #define ISIZE_MAX I32_MAX
+
+    #define USIZE_MIN U32_MIN
+    #define USIZE_MAX U32_MAX
+#endif
 
 typedef i32 Rune; // Unicode codepoint
+
 #define CY_RUNE_INVALID (Rune)(0XFFFD)
 #define CY_RUNE_MAX (Rune)(0X0010FFFF)
 #define CY_RUNE_BOM (Rune)(0XFEFF)
@@ -433,7 +455,7 @@ CY_DEF inline char *cy_alloc_string_len(
 
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
-CY_DEF inline isize cy_cstring_len(const char *str)
+CY_DEF inline isize cy_str_len(const char *str)
 {
     if (str == NULL) {
         return 0;
@@ -459,7 +481,7 @@ CY_DEF inline isize cy_cstring_len(const char *str)
 
 CY_DEF inline char *cy_alloc_string(CyAllocator a, const char *str)
 {
-    return cy_alloc_string_len(a, str, cy_cstring_len(str));
+    return cy_alloc_string_len(a, str, cy_str_len(str));
 }
 
 #include <malloc.h>
@@ -829,13 +851,17 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             cur_node = cur_node->next;
         }
         if (!found_node) {
-            return NULL;
+            // NOTE(cya): memory is not the latest allocation (making new one)
+            void *new_mem = cy_alloc_align(cy_arena_allocator(arena), size, align);
+            CY_VALIDATE_PTR(new_mem);
+
+            cy_mem_copy(new_mem, old_mem, old_size);
+            return new_mem;
         }
 
         intptr aligned_offset = cy_align_forward(prev_offset, align);
         u8 *new_memory = cur_node->buf + aligned_offset;
         if (new_memory + size < cur_node->buf + cur_node->size) {
-            intptr tmp_offset = cur_node->offset;
             cur_node->offset = aligned_offset + size;
             if (cur_node->offset < cur_node->prev_offset + old_size) {
                 cy_mem_set(
@@ -844,7 +870,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
                 );
             }
 
-            cur_node->prev_offset = tmp_offset;
+            cur_node->prev_offset = aligned_offset;
             return new_memory;
         }
 
@@ -1083,7 +1109,6 @@ void stack_deinit(Stack *stack)
     stack->free(stack);
 }
 
-
 /* TODO(cya):
  * add init_from_buffer proc to arena and other 'fixed' allocators
  * repurpose stack allocator
@@ -1092,6 +1117,30 @@ void stack_deinit(Stack *stack)
  * freelist allocator
  * general-purpose heap allocator to replace malloc
  */
+
+ /* ============================ Char functions ============================= */
+CY_DEF const char *cy_char_first_occurence(const char *str, char c)
+{
+    for (; *str != c; str++) {
+        if (*str == '\0')  {
+            return NULL;
+        }
+    }
+
+    return str;
+}
+
+CY_DEF const char *cy_char_last_occurence(const char *str, char c)
+{
+    const char *res = NULL;
+    do {
+        if (*str == c) {
+            res = str;
+        }
+    } while (*str++ != '\0');
+
+    return res;
+}
 
 /* ================================ Strings ================================= */
 typedef char *CyString;
@@ -1106,20 +1155,45 @@ typedef struct {
 
 CY_DEF inline isize cy_string_len(CyString str)
 {
-    if (str == NULL) {
-        return 0;
-    }
-
-    return CY_STRING_HEADER(str)->len;
+    return (str == NULL) ? 0 : CY_STRING_HEADER(str)->len;
 }
 
 CY_DEF inline isize cy_string_cap(CyString str)
 {
-    if (str == NULL) {
-        return 0;
+    return (str == NULL) ? 0 : CY_STRING_HEADER(str)->cap;
+}
+
+CY_DEF inline isize cy_string_alloc_size(CyString str)
+{
+    return sizeof(CyStringHeader) + cy_string_cap(str) + 1;
+}
+
+CY_DEF inline isize cy_string_available_space(CyString str)
+{
+    CyStringHeader *h = CY_STRING_HEADER(str);
+    if (h->cap > h->len) {
+        return h->cap - h->len;
     }
 
-    return CY_STRING_HEADER(str)->cap;
+    return 0;
+}
+
+CY_DEF inline void cy__string_set_len(CyString str, isize len)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    CY_STRING_HEADER(str)->len = len;
+}
+
+CY_DEF inline void cy__string_set_cap(CyString str, isize cap)
+{
+    if (str == NULL) {
+        return;
+    }
+
+    CY_STRING_HEADER(str)->cap = cap;
 }
 
 CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap)
@@ -1170,7 +1244,7 @@ CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
 
 CY_DEF CyString cy_string_create(CyAllocator a, const char *str)
 {
-    return cy_string_create_len(a, str, cy_cstring_len(str));
+    return cy_string_create_len(a, str, cy_str_len(str));
 }
 
 CY_DEF void cy_string_free(CyString str)
@@ -1180,14 +1254,136 @@ CY_DEF void cy_string_free(CyString str)
     }
 }
 
+CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len)
+{
+    isize available = cy_string_available_space(str);
+    if (available >= extra_len) {
+        return str;
+    }
+
+    void *mem = CY_STRING_HEADER(str);
+    CyStringHeader *header = mem;
+    CyAllocator a = header->alloc;
+
+    isize new_cap = cy_string_len(str) + extra_len;
+    isize old_size = sizeof(*header) + cy_string_cap(str) + 1;
+    isize new_size = sizeof(*header) + new_cap + 1;
+
+    void *new_mem = cy_resize(a, mem, old_size, new_size);
+    CY_VALIDATE_PTR(new_mem);
+
+    header = new_mem;
+    header->alloc = a;
+
+    str = (CyString)(header + 1);
+    cy__string_set_cap(str, new_cap);
+    return str;
+}
+
+CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len)
+{
+    if (len > 0) {
+        isize cur_len = cy_string_len(str);
+
+        str = cy_string_reserve_space_for(str, len);
+        CY_VALIDATE_PTR(str);
+
+        cy_mem_copy(str + cur_len, other, len);
+
+        isize new_len = cur_len + len;
+        str[new_len] = '\0';
+
+        cy__string_set_len(str, new_len);
+    }
+
+    return str;
+}
+
+CY_DEF CyString cy_string_append(CyString str, CyString other)
+{
+    return cy_string_append_len(str, other, cy_string_len(other));
+}
+
+CY_DEF CyString cy_string_appendc(CyString str, const char *other)
+{
+    return cy_string_append_len(str, other, cy_str_len(other));
+}
+
+CY_DEF CyString cy_string_set(CyString str, const char *c_str)
+{
+    isize new_len = cy_str_len(c_str);
+    if (cy_string_cap(str) < new_len) {
+        str = cy_string_reserve_space_for(str, new_len - cy_string_len(str));
+        CY_VALIDATE_PTR(str);
+    }
+
+    cy_mem_copy(str, c_str, new_len + 1);
+    cy__string_set_len(str, new_len);
+
+    return str;
+}
+
+CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src)
+{
+    return cy_string_create_len(a, src, cy_string_len(src));
+}
+
+CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b)
+{
+    isize a_len = cy_string_len(a);
+    isize b_len = cy_string_len(b);
+    if (a_len != b_len) {
+        return false;
+    }
+
+    // TODO(cya): maybe replace with memcmp equivalent?
+    for (isize i = 0; i < a_len; i++) {
+        if (a[i] != b[i]) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
+{
+    char *start, *new_start;
+    new_start = start = str;
+
+    char *end, *new_end;
+    new_end = end = str + cy_string_len(str) - 1;
+    while (
+        new_start <= end &&
+            cy_char_first_occurence(char_set, *new_start) != NULL
+    ) {
+        new_start += 1;
+    }
+    while (
+        new_end > new_start &&
+            cy_char_first_occurence(char_set, *new_end) != NULL
+    ) {
+        new_end -= 1;
+    }
+
+    isize len = (isize)(new_start > new_end ? 0 : new_end - new_start + 1);
+    if (str != new_start) {
+        cy_mem_move(str, new_start, len);
+    }
+
+    str[len] = '\0';
+    cy__string_set_len(str, len);
+    return str;
+}
+
 typedef struct {
-    isize len;
     char *str;
+    isize len;
 } CyStringView;
 
 /* TODO(cya):
  * figure out string views
- * more CyString procedures
-*/
+ * more CyString procedures (trim, etc.)
+ */
 
 #endif /* _CY_H */
