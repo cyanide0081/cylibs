@@ -159,34 +159,56 @@ static void test_cy_strings(void)
 
     print_s("created new string '%s'", str);
 
-    const char *other = "我爱你";
-    str = cy_string_appendc(str, " ");
+    const char *suffix = "我爱你";
+    str = cy_string_append_c(str, " ");
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
-    str = cy_string_appendc(str, other);
+    str = cy_string_append_c(str, suffix);
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     TEST_ASSERT(
-        cy_string_len(str) == len + 1 + cy_str_len(other),
+        cy_string_len(str) == len + 1 + cy_str_len(suffix),
         "unexpected string length difference"
     );
 
     print_s("appended to string, result: '%s'", str);
 
+    const char *prefix = "OwO";
+    str = cy_string_prepend_c(str, " ");
+    TEST_ASSERT_NOT_NULL(str, "unable to prepend string");
+    str = cy_string_prepend_c(str, prefix);
+    TEST_ASSERT_NOT_NULL(str, "unable to prepend string");
+    TEST_ASSERT(
+        cy_string_len(str) == cy_str_len(prefix) + len + cy_str_len(suffix) + 2,
+        "unexpected string length difference"
+    );
+
+    print_s("prepended to string, result: '%s'", str);
+
     CyString dup = cy_string_dup(a, str);
     TEST_ASSERT_NOT_NULL(dup, "string duplication failed");
+
+    print_s("duplicated string");
+
     TEST_ASSERT(
         cy_string_are_equal(str, dup),
         "duplicated string is not equal to source"
     );
 
-    print_s("validated string equality");
+    print_s("validated contents of duplicated string");
 
     isize old_len = cy_string_len(str);
-    str = cy_string_appendc(str, " \t\t   ");
-    str = cy_string_trim(str, " \t");
-    TEST_ASSERT_NOT_NULL(str, "unable to trim string");
-    TEST_ASSERT(cy_string_len(str) == old_len, "incorrectly trimmed string: '%s'", str);
+    str = cy_string_append_c(str, " \t  ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append to string");
 
-    print_s("trimmed trailing whitespace from string");
+    print_s("appended whitespace to string, result: '%s'", str);
+
+    str = cy_string_trim_trailing_whitespace(str);
+    TEST_ASSERT_NOT_NULL(str, "unable to trim string");
+    TEST_ASSERT(
+        cy_string_len(str) == old_len,
+        "incorrectly trimmed string: '%s'", str
+    );
+
+    print_s("trimmed trailing whitespace from string, result: '%s'", str);
 
     cy_free_all(a);
     print_s("freed all strings");

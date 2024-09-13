@@ -525,6 +525,10 @@ void *malloc_align(isize size, isize align)
 
 CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 {
+#if defined(CY_OS_WINDOWS)
+    CY_UNUSED(old_size);
+#endif
+
     CY_UNUSED(allocator_data);
 
     void *ptr = NULL;
@@ -1304,9 +1308,41 @@ CY_DEF CyString cy_string_append(CyString str, CyString other)
     return cy_string_append_len(str, other, cy_string_len(other));
 }
 
-CY_DEF CyString cy_string_appendc(CyString str, const char *other)
+CY_DEF CyString cy_string_append_c(CyString str, const char *other)
 {
     return cy_string_append_len(str, other, cy_str_len(other));
+}
+
+CY_DEF CyString cy_string_prepend_len(
+    CyString str,
+    const char *other,
+    isize len
+) {
+    if (len > 0) {
+        isize cur_len = cy_string_len(str);
+
+        str = cy_string_reserve_space_for(str, len);
+        CY_VALIDATE_PTR(str);
+
+        isize new_len = cur_len + len;
+        cy_mem_move(str + len, str, cur_len);
+        cy_mem_copy(str, other, len);
+
+        str[new_len] = '\0';
+        cy__string_set_len(str, new_len);
+    }
+
+    return str;
+}
+
+CY_DEF CyString cy_string_prepend(CyString str, const CyString other)
+{
+    return cy_string_prepend_len(str, other, cy_string_len(other));
+}
+
+CY_DEF CyString cy_string_prepend_c(CyString str, const char *other)
+{
+    return cy_string_prepend_len(str, other, cy_str_len(other));
 }
 
 CY_DEF CyString cy_string_set(CyString str, const char *c_str)
@@ -1346,24 +1382,35 @@ CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b)
     return true;
 }
 
-CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
-{
+enum {
+    CY__STRING_TRIM_LEADING,
+    CY__STRING_TRIM_TRAILING,
+};
+
+CY_DEF CyString cy__string_trim_internal(
+    CyString str,
+    const char *char_set,
+    isize flags
+) {
     char *start, *new_start;
     new_start = start = str;
-
     char *end, *new_end;
     new_end = end = str + cy_string_len(str) - 1;
-    while (
-        new_start <= end &&
-            cy_char_first_occurence(char_set, *new_start) != NULL
-    ) {
-        new_start += 1;
+    if (flags & CY__STRING_TRIM_LEADING) {
+        while (
+            new_start <= end &&
+                cy_char_first_occurence(char_set, *new_start) != NULL
+        ) {
+            new_start += 1;
+        }
     }
-    while (
-        new_end > new_start &&
-            cy_char_first_occurence(char_set, *new_end) != NULL
-    ) {
-        new_end -= 1;
+    if (flags & CY__STRING_TRIM_TRAILING) {
+        while (
+            new_end > new_start &&
+                cy_char_first_occurence(char_set, *new_end) != NULL
+        ) {
+            new_end -= 1;
+        }
     }
 
     isize len = (isize)(new_start > new_end ? 0 : new_end - new_start + 1);
@@ -1376,14 +1423,49 @@ CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
     return str;
 }
 
+CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
+{
+    return cy__string_trim_internal(
+        str, char_set, CY__STRING_TRIM_LEADING | CY__STRING_TRIM_TRAILING
+    );
+}
+
+CY_DEF CyString cy_string_trim_leading(CyString str, const char *char_set)
+{
+    return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_LEADING);
+}
+
+CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set)
+{
+    return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_TRAILING);
+}
+
+#define CY__WHITESPACE " \t\r\n\v\f"
+
+CY_DEF CyString cy_string_trim_whitespace(CyString str)
+{
+    return cy_string_trim( str, CY__WHITESPACE);
+}
+
+CY_DEF CyString cy_string_trim_leading_whitespace(CyString str)
+{
+    return cy_string_trim_leading(str, CY__WHITESPACE);
+}
+
+CY_DEF CyString cy_string_trim_trailing_whitespace(CyString str)
+{
+    return cy_string_trim_trailing(str, CY__WHITESPACE);
+}
+
 typedef struct {
-    char *str;
+    const char *str;
     isize len;
 } CyStringView;
 
 /* TODO(cya):
- * figure out string views
- * more CyString procedures (trim, etc.)
+ * figure out the design of string views
+ * update trimming functions to support unicode
+ * more CyString procedures
  */
 
 #endif /* _CY_H */
