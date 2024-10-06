@@ -159,10 +159,31 @@ static void test_cy_strings(void)
 
     print_s("created new string '%s'", str);
 
+<<<<<<< Updated upstream
     const char *suffix = "我爱你";
     str = cy_string_append_c(str, " ");
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     str = cy_string_append_c(str, suffix);
+=======
+<<<<<<< Updated upstream
+    const char *other = "我爱你";
+    str = cy_string_append_c(str, " ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append string");
+    str = cy_string_append_c(str, other);
+=======
+<<<<<<< HEAD
+    const char *suffix = "我爱你";
+    str = cy_string_append_c(str, " ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append string");
+    str = cy_string_append_c(str, suffix);
+=======
+    const char *other = "我爱你";
+    str = cy_string_append_c(str, " ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append string");
+    str = cy_string_append_c(str, other);
+>>>>>>> 8841a63 (repurpose stack allocator)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     TEST_ASSERT(
         cy_string_len(str) == len + 1 + cy_str_len(suffix),
@@ -196,12 +217,34 @@ static void test_cy_strings(void)
     print_s("validated contents of duplicated string");
 
     isize old_len = cy_string_len(str);
+<<<<<<< Updated upstream
     str = cy_string_append_c(str, " \t  ");
     TEST_ASSERT_NOT_NULL(str, "unable to append to string");
+=======
+<<<<<<< Updated upstream
+    str = cy_string_append_c(str, " \t\t   ");
+    str = cy_string_trim(str, " \t");
+=======
+<<<<<<< HEAD
+    str = cy_string_append_c(str, " \t  ");
+    TEST_ASSERT_NOT_NULL(str, "unable to append to string");
+=======
+    str = cy_string_append_c(str, " \t\t   ");
+    str = cy_string_trim(str, " \t");
+    TEST_ASSERT_NOT_NULL(str, "unable to trim string");
+    TEST_ASSERT(
+        cy_string_len(str) == old_len, "incorrectly trimmed string: '%s'", str
+    );
+>>>>>>> 8841a63 (repurpose stack allocator)
+>>>>>>> Stashed changes
 
     print_s("appended whitespace to string, result: '%s'", str);
 
     str = cy_string_trim_trailing_whitespace(str);
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     TEST_ASSERT_NOT_NULL(str, "unable to trim string");
     TEST_ASSERT(
         cy_string_len(str) == old_len,

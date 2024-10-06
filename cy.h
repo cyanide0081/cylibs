@@ -1308,11 +1308,35 @@ CY_DEF CyString cy_string_append(CyString str, CyString other)
     return cy_string_append_len(str, other, cy_string_len(other));
 }
 
+<<<<<<< Updated upstream
 CY_DEF CyString cy_string_append_c(CyString str, const char *other)
+=======
+<<<<<<< Updated upstream
+CyString cy_string_append_c(CyString str, const char *other)
+=======
+<<<<<<< HEAD
+CY_DEF CyString cy_string_append_c(CyString str, const char *other)
+=======
+CyString cy_string_append_c(CyString str, const char *other)
+>>>>>>> 8841a63 (repurpose stack allocator)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 {
     return cy_string_append_len(str, other, cy_str_len(other));
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+CyString cy_string_append_rune(CyString str, Rune r)
+{
+    // TODO(cya): utf-8 encode rune
+    isize width = 1;
+    return cy_string_append_len(str, (const char*)&r, width);
+}
+=======
+<<<<<<< HEAD
+>>>>>>> Stashed changes
 CY_DEF CyString cy_string_prepend_len(
     CyString str,
     const char *other,
@@ -1320,6 +1344,58 @@ CY_DEF CyString cy_string_prepend_len(
 ) {
     if (len > 0) {
         isize cur_len = cy_string_len(str);
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
+
+CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+
+    char buf[0x1000] = {0};
+    isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
+
+    va_end(va);
+    return cy_string_append_len(str, buf, len);
+}
+
+CyString cy_string_pad_right(CyString str, isize width, Rune r)
+{
+    // TODO(cya): calculate width with utf8_width proc (to be implemented)
+    isize str_width = cy_utf8_codepoints(str);
+    isize rune_width = 1;
+    while (str_width < width) {
+        str = cy_string_append_rune(str, r);
+        str_width += rune_width;
+    }
+
+    CY_VALIDATE_PTR(str);
+    return str;
+}
+
+<<<<<<< Updated upstream
+CyString cy_string_set(CyString str, const char *c_str)
+=======
+CY_DEF CyString cy_string_prepend(CyString str, const CyString other)
+{
+    return cy_string_prepend_len(str, other, cy_string_len(other));
+}
+
+CY_DEF CyString cy_string_prepend_c(CyString str, const char *other)
+{
+    return cy_string_prepend_len(str, other, cy_str_len(other));
+}
+
+CY_DEF CyString cy_string_set(CyString str, const char *c_str)
+=======
+CyString cy_string_append_rune(CyString str, Rune r)
+{
+    // TODO(cya): utf-8 encode rune
+    isize width = 1;
+    return cy_string_append_len(str, (const char*)&r, width);
+}
+>>>>>>> Stashed changes
 
         str = cy_string_reserve_space_for(str, len);
         CY_VALIDATE_PTR(str);
@@ -1335,6 +1411,7 @@ CY_DEF CyString cy_string_prepend_len(
     return str;
 }
 
+<<<<<<< Updated upstream
 CY_DEF CyString cy_string_prepend(CyString str, const CyString other)
 {
     return cy_string_prepend_len(str, other, cy_string_len(other));
@@ -1346,6 +1423,11 @@ CY_DEF CyString cy_string_prepend_c(CyString str, const char *other)
 }
 
 CY_DEF CyString cy_string_set(CyString str, const char *c_str)
+=======
+CyString cy_string_set(CyString str, const char *c_str)
+>>>>>>> 8841a63 (repurpose stack allocator)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 {
     isize new_len = cy_str_len(c_str);
     if (cy_string_cap(str) < new_len) {
@@ -1382,6 +1464,14 @@ CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b)
     return true;
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+CyString cy_string_trim(CyString str, const char *char_set)
+{
+=======
+<<<<<<< HEAD
+>>>>>>> Stashed changes
 enum {
     CY__STRING_TRIM_LEADING,
     CY__STRING_TRIM_TRAILING,
@@ -1392,6 +1482,14 @@ CY_DEF CyString cy__string_trim_internal(
     const char *char_set,
     isize flags
 ) {
+<<<<<<< Updated upstream
+=======
+=======
+CyString cy_string_trim(CyString str, const char *char_set)
+{
+>>>>>>> 8841a63 (repurpose stack allocator)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
     char *start, *new_start;
     new_start = start = str;
     char *end, *new_end;
@@ -1423,7 +1521,17 @@ CY_DEF CyString cy__string_trim_internal(
     return str;
 }
 
+<<<<<<< Updated upstream
 CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
+=======
+<<<<<<< Updated upstream
+/* ----------------------------- String views ------------------------------- */
+CyStringView cy_string_view_create_len(const char *str, isize len)
+=======
+<<<<<<< HEAD
+CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
+>>>>>>> Stashed changes
+>>>>>>> Stashed changes
 {
     return cy__string_trim_internal(
         str, char_set, CY__STRING_TRIM_LEADING | CY__STRING_TRIM_TRAILING
@@ -1435,6 +1543,11 @@ CY_DEF CyString cy_string_trim_leading(CyString str, const char *char_set)
     return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_LEADING);
 }
 
+<<<<<<< Updated upstream
+=======
+<<<<<<< Updated upstream
+=======
+>>>>>>> Stashed changes
 CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set)
 {
     return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_TRAILING);
@@ -1467,5 +1580,78 @@ typedef struct {
  * update trimming functions to support unicode
  * more CyString procedures
  */
+<<<<<<< Updated upstream
 
 #endif /* _CY_H */
+=======
+=======
+/* ----------------------------- String views ------------------------------- */
+CyStringView cy_string_view_create_len(const char *str, isize len)
+{
+    if (len < 0) {
+        len = cy_str_len(str);
+    }
+
+    return (CyStringView){
+        .text = (const u8*)str,
+        .len = len,
+    };
+}
+>>>>>>> 8841a63 (repurpose stack allocator)
+
+CyStringView cy_string_view_create(CyString str)
+{
+    return cy_string_view_create_len(str, cy_string_len(str));
+}
+
+CyStringView cy_string_view_create_c(const char *str)
+{
+    return cy_string_view_create_len(str, cy_str_len(str));
+}
+
+CyStringView cy_string_view_substring(
+    CyStringView str, isize begin_idx, isize end_idx
+) {
+    isize max = str.len, lo = begin_idx, hi = end_idx;
+    CY_ASSERT_MSG(lo <= hi && hi <= max, "%td..%td..%td", lo, hi, max);
+
+    return cy_string_view_create_len((const char*)str.text + lo, hi - lo);
+}
+
+inline b32 cy_string_view_are_equal(CyStringView a, CyStringView b)
+{
+    return (a.len == b.len) && (cy_mem_compare(a.text, b.text, a.len) == 0);
+}
+
+inline CyString cy_string_append_view(CyString str, CyStringView view)
+{
+    return cy_string_append_len(str, (const char*)view.text, view.len);
+}
+
+inline b32 cy_string_view_has_prefix(CyStringView str, const char *prefix)
+{
+    CyStringView other = cy_string_view_create_c(prefix);
+    return cy_string_view_are_equal(
+        cy_string_view_create_len((const char*)str.text, other.len), other
+    );
+}
+
+b32 cy_string_view_contains(CyStringView str, const char *char_set)
+{
+    isize len = cy_str_len(char_set);
+    // TODO(cya): unicode rune support
+    for (isize i = 0; i < str.len; i++) {
+        for (isize j = 0; j < len; j++) {
+            if (str.text[i] == char_set[j]) {
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+>>>>>>> Stashed changes
+#endif // CY_IMPLEMENTATION
+#endif // _CY_H
+>>>>>>> Stashed changes
