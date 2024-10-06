@@ -1,4 +1,6 @@
+#define CY_IMPLEMENTATION
 #include "cy.h"
+
 #include "testutils.h"
 
 static i32 exit_code;
@@ -140,8 +142,41 @@ static void test_arena_allocator(void)
         print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
 
-    arena_deinit(&arena);
+    cy_arena_deinit(&arena);
     print_s("deinitialized arena");
+}
+
+static void test_stack_allocator(void)
+{
+    printf("%sTesting Stack Allocator...%s\n", VT_BOLD, VT_RESET);
+
+    FILE *f = fopen("sample.txt", "r");
+    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
+
+    fseek(f, 0, SEEK_END);
+    isize txt_len = ftell(f);
+    rewind(f);
+
+    CyStack stack = cy_stack_init(cy_heap_allocator(), txt_len + 2);
+    CyAllocator a = cy_stack_allocator(&stack);
+    print_s("initialized stack");
+
+    isize txt_size = txt_len + 1;
+    char *txt_buf = cy_alloc_align(a, txt_size, 1);
+    fread(txt_buf, sizeof(char), txt_len, f);
+    fclose(f);
+    print_s(
+        "allocated buffer storing file contents (%.2lfKB)",
+        (txt_len + 1) / KB
+    );
+
+    isize expanded_size = txt_size * 2;
+    {
+        txt_buf = cy_resize(a, txt_buf, txt_size, expanded_size);
+        TEST_ASSERT_NOT_NULL(txt_buf, "unable to expand buffer in stack");
+
+        print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
+    }
 }
 
 static void test_cy_strings(void)
@@ -159,18 +194,6 @@ static void test_cy_strings(void)
 
     print_s("created new string '%s'", str);
 
-<<<<<<< Updated upstream
-    const char *suffix = "我爱你";
-    str = cy_string_append_c(str, " ");
-    TEST_ASSERT_NOT_NULL(str, "unable to append string");
-    str = cy_string_append_c(str, suffix);
-=======
-<<<<<<< Updated upstream
-    const char *other = "我爱你";
-    str = cy_string_append_c(str, " ");
-    TEST_ASSERT_NOT_NULL(str, "unable to append string");
-    str = cy_string_append_c(str, other);
-=======
 <<<<<<< HEAD
     const char *suffix = "我爱你";
     str = cy_string_append_c(str, " ");
@@ -182,8 +205,6 @@ static void test_cy_strings(void)
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     str = cy_string_append_c(str, other);
 >>>>>>> 8841a63 (repurpose stack allocator)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     TEST_ASSERT(
         cy_string_len(str) == len + 1 + cy_str_len(suffix),
@@ -217,14 +238,6 @@ static void test_cy_strings(void)
     print_s("validated contents of duplicated string");
 
     isize old_len = cy_string_len(str);
-<<<<<<< Updated upstream
-    str = cy_string_append_c(str, " \t  ");
-    TEST_ASSERT_NOT_NULL(str, "unable to append to string");
-=======
-<<<<<<< Updated upstream
-    str = cy_string_append_c(str, " \t\t   ");
-    str = cy_string_trim(str, " \t");
-=======
 <<<<<<< HEAD
     str = cy_string_append_c(str, " \t  ");
     TEST_ASSERT_NOT_NULL(str, "unable to append to string");
@@ -236,15 +249,10 @@ static void test_cy_strings(void)
         cy_string_len(str) == old_len, "incorrectly trimmed string: '%s'", str
     );
 >>>>>>> 8841a63 (repurpose stack allocator)
->>>>>>> Stashed changes
 
     print_s("appended whitespace to string, result: '%s'", str);
 
     str = cy_string_trim_trailing_whitespace(str);
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     TEST_ASSERT_NOT_NULL(str, "unable to trim string");
     TEST_ASSERT(
         cy_string_len(str) == old_len,
@@ -261,6 +269,7 @@ int main(void)
 {
     test_page_allocator();
     test_arena_allocator();
+    test_stack_allocator();
     test_cy_strings();
 
     return exit_code;

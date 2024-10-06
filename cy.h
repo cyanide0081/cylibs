@@ -1,8 +1,12 @@
 #ifndef _CY_H
 #define _CY_H
 
-// NOTE(cya): a lot of ideas here are from GingerBill's gb library
+// NOTE(cya): a lot of this library is borrowed from GingerBill's gb library
 // https://github.com/gingerBill/gb/blob/master/gb.h
+
+/******************************************************************************
+ ******************************* DECLARATIONS *********************************
+ ******************************************************************************/
 
 #if defined(_WIN32) || defined(_WIN64)
     #define CY_OS_WINDOWS 1
@@ -96,7 +100,6 @@
     #define CY_DEF extern
 #endif
 
-
 /* ================================= Types ================================== */
 #include <stdint.h>
 
@@ -134,8 +137,12 @@ typedef i8 b8;
 typedef i16 b16;
 typedef i32 b32;
 
-#define true (0 == 0)
-#define false (0 != 0)
+#ifndef true
+    #define true (0 == 0)
+#endif
+#ifndef false
+    #define false (0 != 0)
+#endif
 
 /* --------------------------------- Limits --------------------------------- */
 #define U8_MIN 0U
@@ -190,6 +197,7 @@ typedef i32 Rune; // Unicode codepoint
 #define cy_internal static
 #define cy_persist static
 
+/* ================================= Runtime ================================ */
 #include <stdio.h>   // for optional logging
 #include <stdarg.h>  // va_args
 
@@ -197,7 +205,306 @@ typedef i32 Rune; // Unicode codepoint
 #define cy_printf_err(...) fprintf(stderr, __VA_ARGS__)
 #define cy_printf_err_va(fmt, va) vfprintf(stderr, fmt, va)
 
+#define CY_BIT(n) (1 << (n))
+#define CY_UNUSED(param) (void)(param)
+
 CY_DEF void cy_handle_assertion(
+    const char *prefix,
+    const char *cond,
+    const char *file,
+    i32 line,
+    const char *msg,
+    ...
+);
+
+// TODO(cya): remove header and implement mem functions
+#include <string.h>
+
+CY_DEF void *cy_mem_copy(
+    void *restrict dst, const void *restrict src, usize bytes
+);
+CY_DEF void *cy_mem_move(void *dst, const void *src, usize bytes);
+CY_DEF void *cy_mem_set(void *dst, u8 val, usize bytes);
+CY_DEF void *cy_mem_zero(void *dst, usize bytes);
+CY_DEF isize cy_mem_compare(const void *a, const void *b, usize bytes);
+
+CY_DEF b8 cy_is_power_of_two(isize n);
+
+CY_DEF isize cy_align_forward(isize size, isize align);
+CY_DEF void *cy_align_ptr_forward(void *ptr, isize align);
+
+/* Aligns a pointer forward accounting for both the size
+ * of a header and the alignment */
+CY_DEF usize cy_calc_header_padding(
+    uintptr ptr, usize align, usize header_size
+);
+
+/* =============================== Allocators =============================== */
+typedef enum {
+    CY_ALLOCATION_ALLOC,
+    CY_ALLOCATION_ALLOC_ALL,
+    CY_ALLOCATION_FREE,
+    CY_ALLOCATION_FREE_ALL,
+    CY_ALLOCATION_RESIZE,
+} CyAllocationType;
+
+typedef enum {
+    CY_ALLOCATOR_CLEAR_TO_ZERO = CY_BIT(0),
+} CyAllocatorFlags;
+
+#define CY_ALLOCATOR_PROC(name) void *name(      \
+    void *allocator_data, CyAllocationType type, \
+    isize size, isize align,                     \
+    void *old_mem, isize old_size,               \
+    u64 flags                                    \
+)
+
+typedef CY_ALLOCATOR_PROC(CyAllocatorProc);
+
+typedef struct {
+    CyAllocatorProc *proc;
+    void *data;
+} CyAllocator;
+
+#define CY_DEFAULT_ALIGNMENT (2 * sizeof(void*))
+#define CY_DEFAULT_ALLOCATOR_FLAGS (CY_ALLOCATOR_CLEAR_TO_ZERO)
+
+#define cy_alloc_item(allocator, type) cy_alloc(allocator, sizeof(type))
+#define cy_alloc_array(allocator, type, count) \
+    cy_alloc(allocator, (count) * sizeof(type))
+#define cy_resize_array(allocator, arr, type, old_count, new_count) cy_resize( \
+    allocator, arr, (old_count) * sizeof(type), (new_count) * sizeof(type) \
+)
+
+CY_DEF void *cy_alloc_align(CyAllocator a, isize size, isize align);
+CY_DEF void *cy_alloc(CyAllocator a, isize size);
+CY_DEF void cy_free(CyAllocator a, void *ptr);
+CY_DEF void cy_free_all(CyAllocator a);
+CY_DEF void *cy_resize_align(
+    CyAllocator a, void *ptr, isize old_size, isize new_size, isize align
+);
+CY_DEF void *cy_resize(
+    CyAllocator a, void *ptr, isize old_size, isize new_size
+);
+// NOTE(cya): a simple resize that should fit most use cases
+CY_DEF void *cy_default_resize_align(
+    CyAllocator a, void *ptr, isize old_size, isize new_size, isize align
+);
+CY_DEF void *cy_default_resize(
+    CyAllocator a, void *ptr, isize old_size, isize new_size
+);
+CY_DEF void *cy_alloc_copy_align(
+    CyAllocator a, const void *src, isize size, isize align
+);
+CY_DEF void *cy_alloc_copy(CyAllocator a, const void *src, isize size);
+CY_DEF char *cy_alloc_string_len(CyAllocator a, const char *str, isize len);
+CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
+
+// TODO(cya): figure out this sorcery
+#define CY__LO_ONES ((usize)-1 / U8_MAX)
+#define CY__HI_ONES (CY__LO_ONES * (U8_MAX / 2 + 1))
+#define CY__HAS_ZERO_BYTE(n) !!(((n) - CY__LO_ONES) & ~(n) & CY__HI_ONES)
+
+#define CY_MIN(a, b) (a < b ? a : b)
+#define CY_MAX(a, b) (a > b ? a : b)
+
+#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
+
+#define CY_STATIC_STR_LEN(str) ((sizeof(str) - 1) / sizeof(*(str)))
+#define CY_STATIC_ARR_LEN(arr) ((sizeof(arr)) / sizeof(*(arr)))
+
+CY_DEF isize cy_str_len(const char *str);
+CY_DEF isize cy_utf8_codepoints(const char *str);
+
+// NOTE(cya): for testing allocators and program behavior on OOM errors
+CyAllocatorProc cy_null_allocator_proc;
+CY_DEF CyAllocator cy_null_allocator(void);
+// CY_ALLOCATOR_PROC(cy_null_allocator_proc);
+
+// NOTE(cya): the default malloc-style heap allocator
+CyAllocatorProc cy_heap_allocator_proc;
+CY_DEF CyAllocator cy_heap_allocator(void);
+
+#define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
+#define cy_heap_free(ptr) cy_free(cy_heap_allocator(), ptr)
+
+/* ------------------------- Page Allocator Section ------------------------- */
+// TODO(cya): query for page size at runtime
+#if defined(CY_OS_WINDOWS)
+    #define CY_PAGE_SIZE (4 * 1024)
+#else
+    #include <sys/mman.h>
+    #ifndef MAP_ANONYMOUS
+        #define MAP_ANONYMOUS MAP_ANON
+    #endif
+
+    #if defined(CY_OS_MACOSX)
+        #define CY_PAGE_SIZE (16 * 1024)
+    #else
+        #define CY_PAGE_SIZE (4 * 1024)
+    #endif
+#endif
+
+typedef struct {
+    void *start; // Actual beginning of the region of pages
+    isize size;  // Total size of allocation (including aligned meta-chunk)
+} CyPageChunk;
+
+CyAllocatorProc cy_page_allocator_proc;
+CY_DEF CyAllocator cy_page_allocator(void);
+
+// NOTE(cya): size of actual usable memory starting at *ptr
+CY_DEF isize cy_page_allocator_alloc_size(void *ptr);
+
+/* ------------------------ Arena Allocator Section ------------------------- */
+typedef struct CyArenaNode {
+    u8 *buf;                  // actual arena memory
+    isize size;               // size of the buffer in bytes
+    isize offset;             // offset to first byte of (unaligned) free memory
+    isize prev_offset;        // offset to first byte of previous allocation
+    struct CyArenaNode *next; // next node (duh)
+} CyArenaNode;
+
+typedef struct {
+    CyArenaNode *first_node;
+} CyArenaState;
+
+typedef struct {
+    CyAllocator backing;
+    CyArenaState state;
+} CyArena;
+
+CyAllocatorProc cy_arena_allocator_proc;
+CY_DEF CyAllocator cy_arena_allocator(CyArena *arena);
+CY_DEF CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size);
+CY_DEF CyArena cy_arena_init(CyAllocator backing, isize initial_size);
+CY_DEF void cy_arena_deinit(CyArena *arena);
+
+/* -------------------------Stack Allocator Section ------------------------- */
+typedef struct CyStackNode {
+    u8 *buf;
+    isize size;
+    isize prev_offset;
+    isize offset;
+    struct CyStackNode *next;
+} CyStackNode;
+
+typedef struct {
+    CyStackNode *first_node;
+} CyStackState;
+
+typedef struct {
+    CyAllocator backing;
+    CyStackState state;
+} CyStack;
+
+typedef struct {
+    isize prev_offset;
+    isize padding;
+} CyStackHeader;
+
+/* Default initial size set to one page */
+#define CY_STACK_INIT_SIZE     0x4000
+#define CY_STACK_GROWTH_FACTOR 2.0
+
+CyAllocatorProc cy_stack_allocator_proc;
+CY_DEF CyAllocator cy_stack_allocator(CyStack *stack);
+
+CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
+CY_DEF CyStackNode *cy_stack_insert_node(CyStack *stack, isize size);
+
+/* TODO(cya):
+ * add init_from_buffer proc to arena and other 'fixed' allocators
+ * repurpose stack allocator
+ * bitmap allocator
+ * pool allocator
+ * buddy allocator
+ * freelist allocator
+ * extra allocator strategies from: https://www.youtube.com/watch?v=LIb3L4vKZ7U
+ * general-purpose heap allocator composed of the basic ones to replace malloc
+ */
+
+ /* ============================== Char procs =============================== */
+CY_DEF const char *cy_char_first_occurence(const char *str, char c);
+CY_DEF const char *cy_char_last_occurence(const char *str, char c);
+
+/* ================================ Strings ================================= */
+typedef char *CyString;
+
+typedef struct {
+    CyAllocator alloc;
+    isize len;
+    isize cap;
+} CyStringHeader;
+
+#define CY_STRING_HEADER(str) ((CyStringHeader*)(str) - 1)
+
+CY_DEF isize cy_string_len(CyString str);
+CY_DEF isize cy_string_cap(CyString str);
+CY_DEF isize cy_string_alloc_size(CyString str);
+CY_DEF isize cy_string_available_space(CyString str);
+
+CY_DEF void cy__string_set_len(CyString str, isize len);
+CY_DEF void cy__string_set_cap(CyString str, isize cap);
+
+CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap);
+CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len);
+CY_DEF CyString cy_string_create(CyAllocator a, const char *str);
+CY_DEF void cy_string_free(CyString str);
+CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len);
+CY_DEF CyString cy_string_shrink(CyString str);
+
+CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len);
+CY_DEF CyString cy_string_append(CyString str, CyString other);
+CY_DEF CyString cy_string_append_c(CyString str, const char *other);
+CY_DEF CyString cy_string_append_rune(CyString str, Rune r);
+CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...);
+CY_DEF CyString cy_string_pad_right(CyString str, isize width, Rune r);
+CY_DEF CyString cy_string_set(CyString str, const char *c_str);
+CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src);
+CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b);
+
+enum {
+    CY__STRING_TRIM_LEADING,
+    CY__STRING_TRIM_TRAILING,
+};
+
+CY_DEF CyString cy_string_trim(CyString str, const char *char_set);
+CY_DEF CyString cy_string_trim_leading(CyString str, const char *char_set);
+CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set);
+CY_DEF CyString cy__string_trim_internal(
+    CyString str, const char *char_set, isize flags
+);
+
+/* ----------------------------- String views ------------------------------- */
+typedef struct {
+    const u8 *text;
+    isize len;
+} CyStringView;
+
+CY_DEF CyStringView cy_string_view_create_len(const char *str, isize len);
+CY_DEF CyStringView cy_string_view_create(CyString str);
+CY_DEF CyStringView cy_string_view_create_c(const char *str);
+// NOTE(cya): exclusive range
+CY_DEF CyStringView cy_string_view_substring(
+    CyStringView str, isize begin_idx, isize end_idx
+);
+CY_DEF b32 cy_string_view_are_equal(CyStringView a, CyStringView b);
+CY_DEF CyString cy_string_append_view(CyString str, CyStringView view);
+CY_DEF b32 cy_string_view_has_prefix(CyStringView str, const char *prefix);
+CY_DEF b32 cy_string_view_contains(CyStringView str, const char *char_set);
+
+/* TODO(cya):
+ * more CyString/CyStringView procedures (trim, etc.)
+ */
+
+/******************************************************************************
+ ******************************* IMPLEMENTATION *******************************
+ ******************************************************************************/
+
+#ifdef CY_IMPLEMENTATION
+/* ================================= Runtime ================================ */
+void cy_handle_assertion(
     const char *prefix,
     const char *cond,
     const char *file,
@@ -219,42 +526,37 @@ CY_DEF void cy_handle_assertion(
     cy_printf_err("\n");
 }
 
-// TODO(cya): remove header and implement mem functions
-#include <string.h>
-
-CY_DEF void *cy_mem_copy(
-    void *restrict dst,
-    const void *restrict src,
-    usize bytes
-) {
+void *cy_mem_copy(void *restrict dst, const void *restrict src, usize bytes)
+{
     return memcpy(dst, src, bytes);
 }
 
-CY_DEF void *cy_mem_move(void *dst, const void *src, usize bytes)
+void *cy_mem_move(void *dst, const void *src, usize bytes)
 {
     return memmove(dst, src, bytes);
 }
 
-CY_DEF void *cy_mem_set(void *dst, u8 val, usize bytes)
+void *cy_mem_set(void *dst, u8 val, usize bytes)
 {
     return memset(dst, val, bytes);
 }
 
-CY_DEF void *cy_mem_zero(void *dst, usize bytes)
+void *cy_mem_zero(void *dst, usize bytes)
 {
     return cy_mem_set(dst, 0, bytes);
 }
 
-#define CY_BIT(n) (1 << (n))
-#define CY_UNUSED(param) (void)(param)
+isize cy_mem_compare(const void *a, const void *b, usize bytes)
+{
+    return (isize)memcmp(a, b, bytes);
+}
 
-
-CY_DEF inline b8 cy_is_power_of_two(isize n)
+inline b8 cy_is_power_of_two(isize n)
 {
     return (n & (n - 1)) == 0;
 }
 
-CY_DEF inline isize cy_align_forward(isize size, isize align)
+inline isize cy_align_forward(isize size, isize align)
 {
     CY_ASSERT(align > 0 && cy_is_power_of_two(align));
 
@@ -262,18 +564,13 @@ CY_DEF inline isize cy_align_forward(isize size, isize align)
     return mod ? size + align - mod : size;
 }
 
-CY_DEF inline void *cy_align_ptr_forward(void *ptr, isize align)
+inline void *cy_align_ptr_forward(void *ptr, isize align)
 {
     return (void*)cy_align_forward((isize)ptr, align);
 }
 
-/* Aligns a pointer forward accounting for both the size
- * of a header and the alignment */
-CY_DEF inline usize cy_calc_header_padding(
-    uintptr ptr,
-    usize align,
-    usize header_size
-) {
+inline usize cy_calc_header_padding(uintptr ptr, usize align, usize header_size)
+{
     CY_ASSERT(cy_is_power_of_two(align));
 
     uintptr a = (uintptr)align;
@@ -289,36 +586,7 @@ CY_DEF inline usize cy_calc_header_padding(
 }
 
 /* =============================== Allocators =============================== */
-typedef enum {
-    CY_ALLOCATION_ALLOC,
-    CY_ALLOCATION_FREE,
-    CY_ALLOCATION_FREE_ALL,
-    CY_ALLOCATION_RESIZE,
-} CyAllocationType;
-
-typedef enum {
-    CY_ALLOCATOR_CLEAR_TO_ZERO = CY_BIT(0),
-} CyAllocatorFlags;
-
-#define CY_ALLOCATOR_PROC(name)                      \
-    void *name(                                      \
-        void *allocator_data, CyAllocationType type, \
-        isize size, isize align,                     \
-        void *old_mem, isize old_size,               \
-        u64 flags                                    \
-    )
-
-typedef CY_ALLOCATOR_PROC(CyAllocatorProc);
-
-typedef struct {
-    CyAllocatorProc *proc;
-    void *data;
-} CyAllocator;
-
-#define CY_DEFAULT_ALIGNMENT (2 * sizeof(void*))
-#define CY_DEFAULT_ALLOCATOR_FLAGS (CY_ALLOCATOR_CLEAR_TO_ZERO)
-
-CY_DEF inline void *cy_alloc_align(CyAllocator a, isize size, isize align)
+inline void *cy_alloc_align(CyAllocator a, isize size, isize align)
 {
     return a.proc(
         a.data, CY_ALLOCATION_ALLOC,
@@ -328,12 +596,12 @@ CY_DEF inline void *cy_alloc_align(CyAllocator a, isize size, isize align)
     );
 }
 
-CY_DEF inline void *cy_alloc(CyAllocator a, isize size)
+inline void *cy_alloc(CyAllocator a, isize size)
 {
     return cy_alloc_align(a, size, CY_DEFAULT_ALIGNMENT);
 }
 
-CY_DEF inline void cy_free(CyAllocator a, void *ptr)
+inline void cy_free(CyAllocator a, void *ptr)
 {
     if (ptr != NULL) {
         a.proc(
@@ -345,7 +613,7 @@ CY_DEF inline void cy_free(CyAllocator a, void *ptr)
     }
 }
 
-CY_DEF inline void cy_free_all(CyAllocator a)
+inline void cy_free_all(CyAllocator a)
 {
     a.proc(
         a.data, CY_ALLOCATION_FREE_ALL,
@@ -355,12 +623,8 @@ CY_DEF inline void cy_free_all(CyAllocator a)
     );
 }
 
-CY_DEF inline void *cy_resize_align(
-    CyAllocator a,
-    void *ptr,
-    isize old_size,
-    isize new_size,
-    isize align
+inline void *cy_resize_align(
+    CyAllocator a, void *ptr, isize old_size, isize new_size, isize align
 ) {
     return a.proc(
         a.data, CY_ALLOCATION_RESIZE,
@@ -370,22 +634,13 @@ CY_DEF inline void *cy_resize_align(
     );
 }
 
-CY_DEF inline void *cy_resize(
-    CyAllocator a,
-    void *ptr,
-    isize old_size,
-    isize new_size
-) {
+inline void *cy_resize(CyAllocator a, void *ptr, isize old_size, isize new_size)
+{
     return cy_resize_align(a, ptr, old_size, new_size, CY_DEFAULT_ALIGNMENT);
 }
 
-// NOTE(cya): a simple resize that should fit most use cases
 CY_DEF inline void *cy_default_resize_align(
-    CyAllocator a,
-    void *old_mem,
-    isize old_size,
-    isize new_size,
-    isize align
+    CyAllocator a, void *old_mem, isize old_size, isize new_size, isize align
 ) {
     if (old_mem == NULL) {
         return cy_alloc_align(a, new_size, align);
@@ -408,11 +663,8 @@ CY_DEF inline void *cy_default_resize_align(
     return new_mem;
 }
 
-CY_DEF inline void *cy_default_resize(
-    CyAllocator a,
-    void *old_mem,
-    isize old_size,
-    isize new_size
+inline void *cy_default_resize(
+    CyAllocator a, void *old_mem, isize old_size, isize new_size
 ) {
     return cy_default_resize_align(
         a, old_mem,
@@ -421,41 +673,30 @@ CY_DEF inline void *cy_default_resize(
     );
 }
 
-CY_DEF inline void *cy_alloc_copy_align(
-    CyAllocator a,
-    const void *src,
-    isize size,
-    isize align
+inline void *cy_alloc_copy_align(
+    CyAllocator a, const void *src, isize size, isize align
 ) {
     return cy_mem_copy(cy_alloc_align(a, size, align), src, size);
 }
 
-CY_DEF inline void *cy_alloc_copy(CyAllocator a, const void *src, isize size)
+inline void *cy_alloc_copy(CyAllocator a, const void *src, isize size)
 {
     return cy_alloc_copy_align(a, src, size, CY_DEFAULT_ALIGNMENT);
 }
 
-CY_DEF inline char *cy_alloc_string_len(
-    CyAllocator a,
-    const char *str,
-    isize len
-) {
-    char *res = cy_alloc_copy(a, str, len + 1);
+inline char *cy_alloc_string_len(CyAllocator a, const char *str, isize len)
+{
+    char *res = cy_alloc_copy(a, str, len);
     res[len] = '\0';
     return res;
 }
 
-// TODO(cya): figure out this sorcery
-#define CY__LO_ONES ((usize)-1 / U8_MAX)
-#define CY__HI_ONES (CY__LO_ONES * (U8_MAX / 2 + 1))
-#define CY__HAS_ZERO_BYTE(n) !!(((n) - CY__LO_ONES) & ~(n) & CY__HI_ONES)
+inline char *cy_alloc_string(CyAllocator a, const char *str)
+{
+    return cy_alloc_string_len(a, str, cy_str_len(str));
+}
 
-#define CY_MIN(a, b) (a < b ? a : b)
-#define CY_MAX(a, b) (a > b ? a : b)
-
-#define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
-
-CY_DEF inline isize cy_str_len(const char *str)
+inline isize cy_str_len(const char *str)
 {
     if (str == NULL) {
         return 0;
@@ -479,27 +720,72 @@ CY_DEF inline isize cy_str_len(const char *str)
     return str - begin;
 }
 
-CY_DEF inline char *cy_alloc_string(CyAllocator a, const char *str)
+inline isize cy_utf8_codepoints(const char *str)
 {
-    return cy_alloc_string_len(a, str, cy_str_len(str));
+    isize count = 0;
+    while (*str != '\0') {
+        u8 c = *str;
+        u8 inc = 0;
+        if (c < 0x80) {
+            inc = 1;
+        } else if ((c & 0xE0) == 0xC0) {
+            inc = 2;
+        } else if ((c & 0xF0) == 0xE0) {
+            inc = 3;
+        } else if ((c & 0xF8) == 0xF0) {
+            inc = 4;
+        } else {
+            return -1;
+        }
+
+        str += inc;
+        count += 1;
+    }
+
+    return count;
 }
 
-#include <malloc.h>
+CyAllocator cy_null_allocator(void)
+{
+    return (CyAllocator){
+        .proc = cy_null_allocator_proc,
+    };
+}
 
-// NOTE(cya): for single items and arrays
-#define cy_alloc_item(allocator, Type) (Type*)cy_alloc(allocator, sizeof(Type))
-#define cy_alloc_array(allocator, Type, count) \
-    (Type*)cy_alloc(allocator, sizeof(Type) * (count))
+CY_ALLOCATOR_PROC(cy_null_allocator_proc)
+{
+    CY_UNUSED(allocator_data);
+    CY_UNUSED(size);
+    CY_UNUSED(align);
+    CY_UNUSED(old_size);
+    CY_UNUSED(flags);
 
-CyAllocatorProc cy_heap_allocator_proc;
+    void *ptr = NULL;
+    switch(type) {
+    case CY_ALLOCATION_ALLOC: {
+    } break;
+    case CY_ALLOCATION_ALLOC_ALL: {
+    } break;
+    case CY_ALLOCATION_FREE: {
+        CY_ASSERT_MSG(old_mem == NULL, "null allocator: invalid pointer");
+    } break;
+    case CY_ALLOCATION_FREE_ALL: {
+    } break;
+    case CY_ALLOCATION_RESIZE: {
+    } break;
+    }
 
-// NOTE(cya): the default malloc-style heap allocator
+    return ptr;
+}
+
 CY_DEF CyAllocator cy_heap_allocator(void)
 {
     return (CyAllocator){
         .proc = cy_heap_allocator_proc,
     };
 }
+
+#include <malloc.h>
 
 #ifdef CY_OS_WINDOWS
     #define malloc_align(s, a) _aligned_malloc(s, a)
@@ -530,6 +816,7 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
 #endif
 
     CY_UNUSED(allocator_data);
+    CY_UNUSED(old_size);
 
     void *ptr = NULL;
     switch(type) {
@@ -542,11 +829,12 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
             cy_mem_zero(ptr, size);
         }
     } break;
+    case CY_ALLOCATION_ALLOC_ALL: {
+    } break;
     case CY_ALLOCATION_FREE: {
         free_align(old_mem, align);
     } break;
     case CY_ALLOCATION_FREE_ALL: {
-        CY_ASSERT_MSG(false, "heap allocator doesn't support free-all");
     } break;
     case CY_ALLOCATION_RESIZE: {
         void *new_ptr = realloc_align(
@@ -562,41 +850,15 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
     return ptr;
 }
 
-#define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
-#define cy_heap_free(ptr) cy_free(cy_heap_allocator(), ptr)
-
 /* ------------------------- Page Allocator Section ------------------------- */
-#if defined(CY_OS_WINDOWS)
-    #define CY_PAGE_SIZE (4 * 1024)
-#else
-    #include <sys/mman.h>
-    #ifndef MAP_ANONYMOUS
-        #define MAP_ANONYMOUS MAP_ANON
-    #endif
-
-    #if defined(CY_OS_MACOSX)
-        #define CY_PAGE_SIZE (16 * 1024)
-    #else
-        #define CY_PAGE_SIZE (4 * 1024)
-    #endif
-#endif
-
-typedef struct {
-    void *start; // Actual beginning of the region of pages
-    isize size;  // Total size of allocation (including aligned meta-chunk)
-} CyPageChunk;
-
-CyAllocatorProc cy_page_allocator_proc;
-
-CY_DEF CyAllocator cy_page_allocator(void)
+CyAllocator cy_page_allocator(void)
 {
     return (CyAllocator){
         .proc = cy_page_allocator_proc,
     };
 }
 
-// NOTE(cya): size of actual usable memory starting at *ptr
-CY_DEF isize cy_page_allocator_alloc_size(void *ptr)
+isize cy_page_allocator_alloc_size(void *ptr)
 {
     CyPageChunk *chunk = (CyPageChunk*)ptr - 1;
     intptr diff = (uintptr)ptr - (uintptr)chunk->start;
@@ -648,6 +910,8 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
         ptr = (u8*)mem + chunk_padding;
         CY_ASSERT(ptr == cy_align_ptr_forward(ptr, align));
     } break;
+    case CY_ALLOCATION_ALLOC_ALL: {
+    } break;
     case CY_ALLOCATION_FREE: {
         CyPageChunk *chunk = (CyPageChunk*)old_mem - 1;
         void *start = chunk->start;
@@ -660,7 +924,6 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 #endif
     } break;
     case CY_ALLOCATION_FREE_ALL: {
-        CY_ASSERT_MSG(false, "page allocator doesn't support free-all");
     } break;
     case CY_ALLOCATION_RESIZE: {
         // TODO(cya): test this resizing logic a bit more thoroughly
@@ -709,26 +972,7 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 }
 
 /* ------------------------ Arena Allocator Section ------------------------- */
-typedef struct CyArenaNode {
-    u8 *buf;                  // actual arena memory
-    isize size;               // size of the buffer in bytes
-    isize offset;             // offset to first byte of (unaligned) free memory
-    isize prev_offset;        // offset to first byte of previous allocation
-    struct CyArenaNode *next; // next node (duh)
-} CyArenaNode;
-
-typedef struct {
-    CyArenaNode *first_node;
-} CyArenaState;
-
-typedef struct {
-    CyAllocator backing;
-    CyArenaState state;
-} CyArena;
-
-CyAllocatorProc cy_arena_allocator_proc;
-
-CY_DEF inline CyAllocator cy_arena_allocator(CyArena *arena)
+inline CyAllocator cy_arena_allocator(CyArena *arena)
 {
     return (CyAllocator){
         .proc = cy_arena_allocator_proc,
@@ -739,8 +983,10 @@ CY_DEF inline CyAllocator cy_arena_allocator(CyArena *arena)
 #define CY_ARENA_INIT_SIZE     CY_PAGE_SIZE
 #define CY_ARENA_GROWTH_FACTOR 2.0
 
-CY_DEF inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
+inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
 {
+    CY_VALIDATE_PTR(arena);
+
     isize node_padding = sizeof(CyArenaNode) + CY_DEFAULT_ALIGNMENT;
     isize new_node_size = node_padding + size;
     CyArenaNode *new_node = cy_alloc(arena->backing, new_node_size);
@@ -754,7 +1000,7 @@ CY_DEF inline CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size)
     return new_node;
 }
 
-CY_DEF inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
+inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
 {
     CY_ASSERT_NOT_NULL(backing.proc);
 
@@ -763,19 +1009,20 @@ CY_DEF inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
         initial_size = default_size;
     }
 
-    CyArena arena = {0};
-    arena.backing = backing;
+    CyArena arena = {
+        .backing = backing,
+    };
     arena.state.first_node = cy_arena_insert_node(&arena, initial_size);
     return arena;
 }
 
-CY_DEF inline void arena_deinit(CyArena *arena)
+inline void cy_arena_deinit(CyArena *arena)
 {
-    CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
-    while (next != NULL) {
-        cur_node = next;
-        next = next->next;
+    CyArenaNode *cur_node = arena->state.first_node;
+    while (cur_node != NULL) {
+        CyArenaNode *next = cur_node->next;
         cy_free(arena->backing, cur_node);
+        cur_node = next;
     }
 }
 
@@ -784,6 +1031,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
     CY_UNUSED(flags);
 
     CyArena *arena = (CyArena*)allocator_data;
+    CyAllocator a = cy_arena_allocator(arena);
     void *ptr = NULL;
     switch(type) {
     case CY_ALLOCATION_ALLOC: {
@@ -818,8 +1066,23 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 
         ptr = aligned_end;
     } break;
+    case CY_ALLOCATION_ALLOC_ALL: {
+        CyAllocator backing = arena->backing;
+        CyArenaNode *cur_node = arena->state.first_node->next, *next;
+        while (cur_node != NULL) {
+            next = cur_node->next;
+            cy_free(backing, cur_node);
+            cur_node = next;
+        }
+
+        cur_node = arena->state.first_node;
+        isize remaining = cur_node->size - cur_node->offset;
+        ptr = cy_alloc_align(backing, remaining, align);
+        CY_VALIDATE_PTR(ptr);
+
+        ptr = cy_align_ptr_forward(ptr, align);
+    } break;
     case CY_ALLOCATION_FREE: {
-        CY_ASSERT_MSG(false, "arenas don't support individual frees");
     } break;
     case CY_ALLOCATION_FREE_ALL: {
         CyArenaNode *cur_node = arena->state.first_node, *next = cur_node->next;
@@ -839,7 +1102,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 
         u8 *old_memory = old_mem;
         if (old_memory == NULL || old_size == 0) {
-            return cy_alloc_align(cy_arena_allocator(arena), size, align);
+            return cy_alloc_align(a, size, align);
         }
 
         CyArenaNode *cur_node = arena->state.first_node;
@@ -856,7 +1119,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         }
         if (!found_node) {
             // NOTE(cya): memory is not the latest allocation (making new one)
-            void *new_mem = cy_alloc_align(cy_arena_allocator(arena), size, align);
+            void *new_mem = cy_alloc_align(a, size, align);
             CY_VALIDATE_PTR(new_mem);
 
             cy_mem_copy(new_mem, old_mem, old_size);
@@ -878,7 +1141,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             return new_memory;
         }
 
-        void *new_ptr = cy_alloc_align(cy_arena_allocator(arena), size, align);
+        void *new_ptr = cy_alloc_align(a, size, align);
         CY_VALIDATE_PTR(new_ptr);
 
         cy_mem_move(new_ptr, old_memory, CY_MIN(old_size, size));
@@ -890,240 +1153,230 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 }
 
 /* -------------------------Stack Allocator Section ------------------------- */
-typedef struct StackNode {
-    unsigned char *buf;
-    usize size;
-    usize prev_offset;
-    usize offset;
-    struct StackNode *next;
-} StackNode;
+CY_DEF CyAllocator cy_stack_allocator(CyStack *stack)
+{
+    return (CyAllocator){
+        .data = stack,
+        .proc = cy_stack_allocator_proc,
+    };
+}
 
-typedef struct StackState {
-    StackNode *first_node;
-} StackState;
-
-typedef struct Stack {
-    void *(*alloc)(usize);
-    void (*free)(void*);
-    StackState *state;
-} Stack;
-
-typedef struct StackHeader {
-    usize prev_offset;
-    usize padding;
-} StackHeader;
-
-/* Default initial size set to one page */
-#define CY_STACK_INIT_SIZE     CY_PAGE_SIZE
-#define CY_STACK_GROWTH_FACTOR 2.0
-#define CY_STACK_STRUCTS_SIZE \
-    (sizeof(Stack) + sizeof(StackState) + sizeof(StackNode))
-
-CY_DEF inline Stack *stack_init(
-    usize initial_size,
-    void *(*backing_allocator)(usize),
-    void (*backing_deallocator)(void*)
-) {
-    if (initial_size == 0) initial_size = CY_STACK_INIT_SIZE;
-
-    if (backing_allocator == NULL && backing_deallocator == NULL) {
-        // backing_allocator = page_alloc;
-        // backing_deallocator = page_free;
-        initial_size = cy_align_forward(initial_size, CY_PAGE_SIZE);
-    } else if (backing_allocator == NULL || backing_deallocator == NULL) {
-        return NULL;
+inline CyStack cy_stack_init(CyAllocator backing, isize initial_size)
+{
+    isize default_size = CY_STACK_INIT_SIZE;
+    if (initial_size == 0) {
+        initial_size = default_size;
     }
 
-    usize size = CY_STACK_STRUCTS_SIZE + initial_size;
-    Stack *stack = backing_allocator(size);
-    if (stack == NULL) return NULL;
-
-    stack->alloc = backing_allocator;
-    stack->free = backing_deallocator;
-    stack->state = (StackState*)(stack + 1);
-
-    stack->state->first_node = (StackNode*)(stack->state + 1);
-
-    StackNode *first_node = stack->state->first_node;
-    first_node->buf = (unsigned char*)(first_node + 1);
-    first_node->size = initial_size;
-
+    CyStack stack = {
+        .backing = backing,
+    };
+    stack.state.first_node = cy_stack_insert_node(&stack, initial_size);
     return stack;
 }
 
-CY_DEF inline StackNode *cy_stack_insert_node(Stack *stack, usize size)
+inline CyStackNode *cy_stack_insert_node(CyStack *stack, isize size)
 {
-    if (stack == NULL) return NULL;
+    CY_VALIDATE_PTR(stack);
 
-    StackNode *cur_node = stack->state->first_node;
-    usize new_node_size = sizeof(*cur_node) + size;
-    StackNode *new_node = stack->alloc(new_node_size);
-    if (new_node == NULL) return NULL;
+    isize node_padding = sizeof(CyStackNode) + CY_DEFAULT_ALIGNMENT;
+    isize new_node_size = node_padding + size;
+    CyStackNode *new_node = cy_alloc(stack->backing, new_node_size);
+    CY_VALIDATE_PTR(new_node);
 
-    new_node->buf = (unsigned char*)(new_node + 1);
+    new_node->buf = cy_align_ptr_forward(new_node + 1, CY_DEFAULT_ALIGNMENT);
     new_node->size = size;
-    new_node->next = stack->state->first_node;
-    stack->state->first_node = new_node;
+    new_node->next = stack->state.first_node;
+    stack->state.first_node = new_node;
 
     return new_node;
 }
 
-void *stack_alloc_align(Stack *stack, usize size, usize align)
+CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
 {
-    if (stack == NULL) return NULL;
+    CY_UNUSED(flags);
+    CY_ASSERT(cy_is_power_of_two(align));
 
-    StackHeader *header;
-    StackNode *cur_node = stack->state->first_node;
-    uintptr cur_address = (uintptr)(cur_node->buf + cur_node->offset);
-    usize padding = cy_calc_header_padding(cur_address,
-        align, sizeof(*header));
-    usize alloc_size = padding + size;
-    if (cur_node->offset + padding + size > cur_node->size) {
-        /* out of memory (TODO: implement finished linked-list stack logic) */
-        usize node_size = cur_node->size * CY_STACK_GROWTH_FACTOR;
-        if (node_size < alloc_size)
-            node_size = cy_align_forward(alloc_size, CY_PAGE_SIZE);
+    CyStack *stack = (CyStack*)allocator_data;
+    CyAllocator a = cy_stack_allocator(stack);
+    void *ptr = NULL;
+    switch(type) {
+    case CY_ALLOCATION_ALLOC: {
+        CyStackNode *cur_node = stack->state.first_node;
+        u8 *cur_addr = cur_node->buf + cur_node->offset;
+        CyStackHeader *header;
+        isize padding = cy_calc_header_padding(
+            (uintptr)cur_addr, align, sizeof(*header)
+        );
+        u8 *alloc_end = cur_addr + padding + size;
+        while (alloc_end > cur_node->buf + cur_node->size) {
+            if (cur_node->next == NULL) {
+                isize largest_node_size = stack->state.first_node->size;
+                isize new_size = largest_node_size * CY_STACK_GROWTH_FACTOR;
 
-        cur_node = cy_stack_insert_node(stack, node_size);
-        if (cur_node == NULL) return NULL;
+                cur_node = cy_stack_insert_node(stack, CY_MAX(new_size, size));
+                CY_VALIDATE_PTR(cur_node);
 
-        cur_address = (uintptr)(cur_node->buf + cur_node->offset);
-        padding = cy_calc_header_padding(cur_address, align, sizeof(*header));
-    }
+                cur_addr = cur_node->buf + cur_node->offset;
+                padding = cy_calc_header_padding(
+                    (uintptr)cur_addr, align, sizeof(*header)
+                );
+                alloc_end = cur_addr + padding + size;
+                break;
+            }
 
-    uintptr next_address = cur_address + (uintptr)padding;
-    header = (StackHeader*)(next_address - sizeof(*header));
-    header->padding = (u8)padding;
-    header->prev_offset = cur_node->offset;
+            cur_node = cur_node->next;
+            cur_addr = cur_node->buf + cur_node->offset;
+            padding = cy_calc_header_padding(
+                (uintptr)cur_addr, align, sizeof(*header)
+            );
+            alloc_end = cur_addr + padding + size;
+        }
 
-    cur_node->prev_offset = header->prev_offset;
-    cur_node->offset += alloc_size;
+        u8 *alloc_start = cur_addr + padding;
+        header = (CyStackHeader*)alloc_start - 1;
+        header->padding = padding;
+        header->prev_offset = cur_node->offset;
 
-    return (void*)next_address;
-}
+        cur_node->prev_offset = header->prev_offset;
+        cur_node->offset += size + padding;
 
-void *stack_alloc(Stack *stack, usize size)
-{
-    return stack_alloc_align(stack, size, CY_DEFAULT_ALIGNMENT);
-}
+        ptr = alloc_start;
+    } break;
+    case CY_ALLOCATION_ALLOC_ALL: {
+        CyAllocator backing = stack->backing;
+        CyStackNode *cur_node = stack->state.first_node->next, *next;
+        while (cur_node != NULL) {
+            next = cur_node->next;
+            cy_free(backing, cur_node);
+            cur_node = next;
+        }
 
-void stack_free(Stack *stack, void *ptr)
-{
-    if (ptr == NULL) return;
+        cur_node = stack->state.first_node;
+        isize remaining = cur_node->size - cur_node->offset;
+        ptr = cy_alloc_align(backing, remaining, align);
+        CY_VALIDATE_PTR(ptr);
 
-    StackNode *cur_node = stack->state->first_node;
-    uintptr start = (uintptr)cur_node->buf;
-    uintptr end = start + (uintptr)cur_node->size;
-    uintptr cur_address = (uintptr)ptr;
-    if (!(start <= cur_address && cur_address < end)) {
-        CY_ASSERT(0 && "out-of-bounds pointer deallocation (stack_free())");
-        return;
-    }
-    if (cur_address >= start + (uintptr)cur_node->offset) {
-        /* allow double-frees */
-        return;
-    }
+        ptr = cy_align_ptr_forward(ptr, align);
+    } break;
+    case CY_ALLOCATION_FREE: {
+        CY_VALIDATE_PTR(old_mem);
 
-    StackHeader *header = (StackHeader*)(cur_address - sizeof(*header));
-    usize prev_offset = (usize)(cur_address - header->padding - start);
-    if (prev_offset != header->prev_offset) {
-        CY_ASSERT(0 && "out-of-order stack deallocation (stack_free())");
-        return;
-    }
-    cur_node->offset = prev_offset;
-    cur_node->prev_offset = header->prev_offset;
-}
+        CyStackNode *cur_node = stack->state.first_node;
+        u8 *start = cur_node->buf;
+        u8 *end = start + cur_node->size;
+        u8 *cur_addr = old_mem;
+        if (!(start <= cur_addr && cur_addr < end)) {
+            CY_ASSERT_MSG(false, "out-of-bounds pointer");
+            break;;
+        }
+        if (cur_addr >= start + cur_node->offset) {
+            break;; // NOTE(cya): allowing double-frees
+        }
 
-void *stack_realloc_align(
-    Stack *stack,
-    void *ptr,
-    usize old_size,
-    usize new_size,
-    usize align
-) {
-    if (ptr == NULL) {
-        return stack_alloc_align(stack, new_size, CY_DEFAULT_ALIGNMENT);
-    } else if (new_size == 0) {
-        stack_free(stack, ptr);
-        return NULL;
-    }
+        CyStackHeader *header = (CyStackHeader*)cur_addr - 1;
+        isize prev_offset = cur_addr - header->padding - start;
+        if (prev_offset != header->prev_offset) {
+            CY_ASSERT_MSG(false, "out-of-order deallocation");
+            break;;
+        }
 
-    StackNode *cur_node = stack->state->first_node;
-    uintptr start = (uintptr)cur_node->buf;
-    uintptr end = start + cur_node->size;
-    uintptr cur_address = (uintptr)ptr;
-    if (!(start <= cur_address && cur_address < end)) {
-        CY_ASSERT(0 && "out-of-bounds stack reallocation (stack_realloc())");
-        return NULL;
-    }
-    if (cur_address >= start + (uintptr)cur_node->offset) {
-        CY_ASSERT(0 && "out-of-order stack reallocation (stack_realloc())");
-        return NULL;
-    }
+        cur_node->offset = cur_node->prev_offset;
+        cur_node->prev_offset = header->prev_offset;
+    } break;
+    case CY_ALLOCATION_FREE_ALL: {
+        CyStackNode *cur_node = stack->state.first_node, *next = cur_node->next;
+        while (next != NULL) {
+            cur_node = next;
+            next = next->next;
+            cy_free(stack->backing, cur_node);
+        }
 
-    StackHeader *header = (StackHeader*)(cur_address - sizeof(*header));
-    uintptr cur_padding = header->padding;
-    uintptr alloc_start = (uintptr)header - cur_padding;
-    uintptr new_padding =
-        cy_calc_header_padding(alloc_start, align, sizeof(*header));
-    if (new_size <= old_size && new_padding == cur_padding) {
-        cur_node->offset -= old_size - new_size;
-        return ptr;
-    }
+        cur_node = stack->state.first_node;
+        cy_mem_set(cur_node->buf, 0, cur_node->size);
+        cur_node->prev_offset = cur_node->offset = 0;
+        cur_node->next = NULL;
+    } break;
+    case CY_ALLOCATION_RESIZE: {
+        if (old_mem == NULL || old_size == 0) {
+            return cy_alloc_align(a, size, align);
+        } else if (size == 0) {
+            cy_free(a, old_mem);
+            break;
+        }
 
-    usize prev_offset = (usize)(cur_address - header->padding - start);
-    usize new_offset = (usize)(alloc_start + new_padding + new_size - start);
-    if (new_offset <= end) {
-        uintptr new_address = alloc_start + new_padding;
-        usize min_size = old_size < new_size ? old_size : new_size;
-        cy_mem_move((void*)new_address, ptr, min_size);
+        CyStackNode *cur_node = stack->state.first_node;
+        u8 *start = cur_node->buf;
+        u8 *end = start + cur_node->size;
+        u8 *cur_addr = ptr;
+        if (!(start <= cur_addr && cur_addr < end)) {
+            CY_ASSERT_MSG(false, "out-of-bounds reallocation");
+            break;
+        }
+        if (cur_addr >= start + cur_node->offset) {
+            CY_ASSERT_MSG(false, "out-of-order reallocation");
+            break;
+        }
+        b32 unchanged = old_size == size &&
+            old_mem == cy_align_ptr_forward(old_mem, align);
+        if (unchanged) {
+            return old_mem;
+        }
 
-        header = (StackHeader*)(new_address - sizeof(*header));
+        CyStackHeader *header = (CyStackHeader*)cur_addr - 1;
+        isize cur_padding = header->padding;
+        u8 *alloc_start = (u8*)header - cur_padding;
+        isize new_padding = cy_calc_header_padding(
+            (uintptr)alloc_start, align, sizeof(*header)
+        );
+        if (size < old_size && new_padding == cur_padding) {
+            cur_node->offset -= (old_size - size);
+            return cy_align_ptr_forward(old_mem, align);
+        }
+
+        isize prev_offset = (isize)(cur_addr - cur_padding - start);
+        isize new_offset = (isize)(alloc_start + new_padding + size - start);
+        if (new_offset <= cur_node->size) {
+            u8 *new_addr = alloc_start + size + new_padding;
+            header = (CyStackHeader*)new_addr - 1;
+            header->padding = new_padding;
+            header->prev_offset = prev_offset;
+
+            cur_node->offset = new_offset;
+            ptr = alloc_start;
+            break;
+        }
+
+        // NOTE(cya): not enough memory on current node
+        isize largest_node_size = stack->state.first_node->size;
+        isize new_size = largest_node_size * CY_STACK_GROWTH_FACTOR;
+        isize max_alloc_size = align + sizeof(*header) + size;
+
+        cur_node = cy_stack_insert_node(
+            stack, CY_MAX(new_size, max_alloc_size)
+        );
+        CY_VALIDATE_PTR(cur_node);
+
+        cur_addr = cur_node->buf;
+        new_padding = cy_calc_header_padding(
+            (uintptr)cur_addr, align, sizeof(*header)
+        );
+
+        alloc_start = cur_addr + new_padding;
+        header = (CyStackHeader*)alloc_start - 1;
         header->padding = new_padding;
-        header->prev_offset = prev_offset;
-        cur_node->offset = new_offset;
+        header->prev_offset = cur_node->offset;
 
-        return (void*)new_address;
+        cur_node->offset += new_padding + size;
+        ptr = alloc_start;
+    } break;
     }
 
-    void *new_ptr = stack_alloc_align(stack, new_size, align);
-    cy_mem_move(new_ptr, ptr, old_size < new_size ? old_size : new_size);
-
-    cur_node->offset = prev_offset;
-    cur_node->prev_offset = header->prev_offset;
-
-    return new_ptr;
+    return ptr;
 }
 
-void *stack_realloc(Stack *stack, void *ptr, usize old_size, usize new_size)
-{
-    return stack_realloc_align(stack, ptr,
-        old_size, new_size, CY_DEFAULT_ALIGNMENT);
-}
-
-void stack_deinit(Stack *stack)
-{
-    StackNode *cur_node = stack->state->first_node, *next = cur_node->next;
-    while (next != NULL) {
-        stack->free(cur_node);
-        cur_node = next;
-        next = next->next;
-    }
-
-    stack->free(stack);
-}
-
-/* TODO(cya):
- * add init_from_buffer proc to arena and other 'fixed' allocators
- * repurpose stack allocator
- * pool allocator
- * buddy allocator
- * freelist allocator
- * general-purpose heap allocator to replace malloc
- */
-
- /* ============================ Char functions ============================= */
-CY_DEF const char *cy_char_first_occurence(const char *str, char c)
+/* ============================== Char procs =============================== */
+const char *cy_char_first_occurence(const char *str, char c)
 {
     for (; *str != c; str++) {
         if (*str == '\0')  {
@@ -1134,7 +1387,7 @@ CY_DEF const char *cy_char_first_occurence(const char *str, char c)
     return str;
 }
 
-CY_DEF const char *cy_char_last_occurence(const char *str, char c)
+const char *cy_char_last_occurence(const char *str, char c)
 {
     const char *res = NULL;
     do {
@@ -1147,32 +1400,22 @@ CY_DEF const char *cy_char_last_occurence(const char *str, char c)
 }
 
 /* ================================ Strings ================================= */
-typedef char *CyString;
-
-typedef struct {
-    CyAllocator alloc;
-    isize len;
-    isize cap;
-} CyStringHeader;
-
-#define CY_STRING_HEADER(str) ((CyStringHeader*)(str) - 1)
-
-CY_DEF inline isize cy_string_len(CyString str)
+inline isize cy_string_len(CyString str)
 {
     return (str == NULL) ? 0 : CY_STRING_HEADER(str)->len;
 }
 
-CY_DEF inline isize cy_string_cap(CyString str)
+inline isize cy_string_cap(CyString str)
 {
     return (str == NULL) ? 0 : CY_STRING_HEADER(str)->cap;
 }
 
-CY_DEF inline isize cy_string_alloc_size(CyString str)
+inline isize cy_string_alloc_size(CyString str)
 {
     return sizeof(CyStringHeader) + cy_string_cap(str) + 1;
 }
 
-CY_DEF inline isize cy_string_available_space(CyString str)
+inline isize cy_string_available_space(CyString str)
 {
     CyStringHeader *h = CY_STRING_HEADER(str);
     if (h->cap > h->len) {
@@ -1182,7 +1425,7 @@ CY_DEF inline isize cy_string_available_space(CyString str)
     return 0;
 }
 
-CY_DEF inline void cy__string_set_len(CyString str, isize len)
+inline void cy__string_set_len(CyString str, isize len)
 {
     if (str == NULL) {
         return;
@@ -1191,7 +1434,7 @@ CY_DEF inline void cy__string_set_len(CyString str, isize len)
     CY_STRING_HEADER(str)->len = len;
 }
 
-CY_DEF inline void cy__string_set_cap(CyString str, isize cap)
+inline void cy__string_set_cap(CyString str, isize cap)
 {
     if (str == NULL) {
         return;
@@ -1200,7 +1443,7 @@ CY_DEF inline void cy__string_set_cap(CyString str, isize cap)
     CY_STRING_HEADER(str)->cap = cap;
 }
 
-CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap)
+CyString cy_string_create_reserve(CyAllocator a, isize cap)
 {
     isize header_size = sizeof(CyStringHeader);
     isize total_size = header_size + cap + 1;
@@ -1219,7 +1462,7 @@ CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap)
     return (CyString)ptr + header_size;
 }
 
-CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
+CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
 {
     isize header_size = sizeof(CyStringHeader);
     isize total_size = header_size + len + 1;
@@ -1246,19 +1489,19 @@ CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len)
     return string;
 }
 
-CY_DEF CyString cy_string_create(CyAllocator a, const char *str)
+CyString cy_string_create(CyAllocator a, const char *str)
 {
     return cy_string_create_len(a, str, cy_str_len(str));
 }
 
-CY_DEF void cy_string_free(CyString str)
+void cy_string_free(CyString str)
 {
     if (str != NULL) {
-        cy_free(CY_STRING_HEADER(str)->alloc, str);
+        cy_free(CY_STRING_HEADER(str)->alloc, CY_STRING_HEADER(str));
     }
 }
 
-CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len)
+CyString cy_string_reserve_space_for(CyString str, isize extra_len)
 {
     isize available = cy_string_available_space(str);
     if (available >= extra_len) {
@@ -1284,7 +1527,25 @@ CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len)
     return str;
 }
 
-CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len)
+CyString cy_string_shrink(CyString str)
+{
+    CY_VALIDATE_PTR(str);
+
+    isize len = cy_string_len(str), cap = cy_string_cap(str);
+    isize header_size = sizeof(CyStringHeader);
+    isize size = header_size + cap + 1;
+    isize new_size = header_size + len + 1;
+    void *ptr = str - header_size;
+    if (new_size < size) {
+        ptr = cy_resize(CY_STRING_HEADER(str)->alloc, ptr, size, new_size);
+        str = (CyString)ptr + header_size;
+        cy__string_set_cap(str, len);
+    }
+
+    return str;
+}
+
+CyString cy_string_append_len(CyString str, const char *other, isize len)
 {
     if (len > 0) {
         isize cur_len = cy_string_len(str);
@@ -1303,50 +1564,51 @@ CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len)
     return str;
 }
 
-CY_DEF CyString cy_string_append(CyString str, CyString other)
+inline CyString cy_string_append(CyString str, CyString other)
 {
     return cy_string_append_len(str, other, cy_string_len(other));
 }
 
-<<<<<<< Updated upstream
-CY_DEF CyString cy_string_append_c(CyString str, const char *other)
-=======
-<<<<<<< Updated upstream
-CyString cy_string_append_c(CyString str, const char *other)
-=======
-<<<<<<< HEAD
-CY_DEF CyString cy_string_append_c(CyString str, const char *other)
-=======
-CyString cy_string_append_c(CyString str, const char *other)
->>>>>>> 8841a63 (repurpose stack allocator)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+inline CyString cy_string_append_c(CyString str, const char *other)
 {
     return cy_string_append_len(str, other, cy_str_len(other));
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
+CyString cy_string_prepend_len(CyString str, const char *other, isize len)
+{
+    if (len > 0) {
+        isize cur_len = cy_string_len(str);
+
+        str = cy_string_reserve_space_for(str, len);
+        CY_VALIDATE_PTR(str);
+
+        isize new_len = cur_len + len;
+        cy_mem_move(str + len, str, cur_len);
+        cy_mem_copy(str, other, len);
+
+        str[new_len] = '\0';
+        cy__string_set_len(str, new_len);
+    }
+
+    return str;
+}
+
+inline CyString cy_string_prepend(CyString str, const CyString other)
+{
+    return cy_string_prepend_len(str, other, cy_string_len(other));
+}
+
+inline CyString cy_string_prepend_c(CyString str, const char *other)
+{
+    return cy_string_prepend_len(str, other, cy_str_len(other));
+}
+
 CyString cy_string_append_rune(CyString str, Rune r)
 {
     // TODO(cya): utf-8 encode rune
     isize width = 1;
     return cy_string_append_len(str, (const char*)&r, width);
 }
-=======
-<<<<<<< HEAD
->>>>>>> Stashed changes
-CY_DEF CyString cy_string_prepend_len(
-    CyString str,
-    const char *other,
-    isize len
-) {
-    if (len > 0) {
-        isize cur_len = cy_string_len(str);
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
 
 CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
 {
@@ -1374,60 +1636,7 @@ CyString cy_string_pad_right(CyString str, isize width, Rune r)
     return str;
 }
 
-<<<<<<< Updated upstream
 CyString cy_string_set(CyString str, const char *c_str)
-=======
-CY_DEF CyString cy_string_prepend(CyString str, const CyString other)
-{
-    return cy_string_prepend_len(str, other, cy_string_len(other));
-}
-
-CY_DEF CyString cy_string_prepend_c(CyString str, const char *other)
-{
-    return cy_string_prepend_len(str, other, cy_str_len(other));
-}
-
-CY_DEF CyString cy_string_set(CyString str, const char *c_str)
-=======
-CyString cy_string_append_rune(CyString str, Rune r)
-{
-    // TODO(cya): utf-8 encode rune
-    isize width = 1;
-    return cy_string_append_len(str, (const char*)&r, width);
-}
->>>>>>> Stashed changes
-
-        str = cy_string_reserve_space_for(str, len);
-        CY_VALIDATE_PTR(str);
-
-        isize new_len = cur_len + len;
-        cy_mem_move(str + len, str, cur_len);
-        cy_mem_copy(str, other, len);
-
-        str[new_len] = '\0';
-        cy__string_set_len(str, new_len);
-    }
-
-    return str;
-}
-
-<<<<<<< Updated upstream
-CY_DEF CyString cy_string_prepend(CyString str, const CyString other)
-{
-    return cy_string_prepend_len(str, other, cy_string_len(other));
-}
-
-CY_DEF CyString cy_string_prepend_c(CyString str, const char *other)
-{
-    return cy_string_prepend_len(str, other, cy_str_len(other));
-}
-
-CY_DEF CyString cy_string_set(CyString str, const char *c_str)
-=======
-CyString cy_string_set(CyString str, const char *c_str)
->>>>>>> 8841a63 (repurpose stack allocator)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
 {
     isize new_len = cy_str_len(c_str);
     if (cy_string_cap(str) < new_len) {
@@ -1441,12 +1650,12 @@ CyString cy_string_set(CyString str, const char *c_str)
     return str;
 }
 
-CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src)
+CyString cy_string_dup(CyAllocator a, const CyString src)
 {
     return cy_string_create_len(a, src, cy_string_len(src));
 }
 
-CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b)
+b32 cy_string_are_equal(const CyString a, const CyString b)
 {
     isize a_len = cy_string_len(a);
     isize b_len = cy_string_len(b);
@@ -1454,42 +1663,12 @@ CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b)
         return false;
     }
 
-    // TODO(cya): maybe replace with memcmp equivalent?
-    for (isize i = 0; i < a_len; i++) {
-        if (a[i] != b[i]) {
-            return false;
-        }
-    }
-
-    return true;
+    return cy_mem_compare(a, b, a_len) == 0;
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-CyString cy_string_trim(CyString str, const char *char_set)
-{
-=======
-<<<<<<< HEAD
->>>>>>> Stashed changes
-enum {
-    CY__STRING_TRIM_LEADING,
-    CY__STRING_TRIM_TRAILING,
-};
-
-CY_DEF CyString cy__string_trim_internal(
-    CyString str,
-    const char *char_set,
-    isize flags
+CyString cy__string_trim_internal(
+    CyString str, const char *char_set, isize flags
 ) {
-<<<<<<< Updated upstream
-=======
-=======
-CyString cy_string_trim(CyString str, const char *char_set)
-{
->>>>>>> 8841a63 (repurpose stack allocator)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
     char *start, *new_start;
     new_start = start = str;
     char *end, *new_end;
@@ -1521,70 +1700,40 @@ CyString cy_string_trim(CyString str, const char *char_set)
     return str;
 }
 
-<<<<<<< Updated upstream
-CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
-=======
-<<<<<<< Updated upstream
-/* ----------------------------- String views ------------------------------- */
-CyStringView cy_string_view_create_len(const char *str, isize len)
-=======
-<<<<<<< HEAD
-CY_DEF CyString cy_string_trim(CyString str, const char *char_set)
->>>>>>> Stashed changes
->>>>>>> Stashed changes
+inline CyString cy_string_trim(CyString str, const char *char_set)
 {
     return cy__string_trim_internal(
         str, char_set, CY__STRING_TRIM_LEADING | CY__STRING_TRIM_TRAILING
     );
 }
 
-CY_DEF CyString cy_string_trim_leading(CyString str, const char *char_set)
+inline CyString cy_string_trim_leading(CyString str, const char *char_set)
 {
     return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_LEADING);
 }
 
-<<<<<<< Updated upstream
-=======
-<<<<<<< Updated upstream
-=======
->>>>>>> Stashed changes
-CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set)
+inline CyString cy_string_trim_trailing(CyString str, const char *char_set)
 {
     return cy__string_trim_internal(str, char_set, CY__STRING_TRIM_TRAILING);
 }
 
 #define CY__WHITESPACE " \t\r\n\v\f"
 
-CY_DEF CyString cy_string_trim_whitespace(CyString str)
+inline CyString cy_string_trim_whitespace(CyString str)
 {
     return cy_string_trim( str, CY__WHITESPACE);
 }
 
-CY_DEF CyString cy_string_trim_leading_whitespace(CyString str)
+inline CyString cy_string_trim_leading_whitespace(CyString str)
 {
     return cy_string_trim_leading(str, CY__WHITESPACE);
 }
 
-CY_DEF CyString cy_string_trim_trailing_whitespace(CyString str)
+inline CyString cy_string_trim_trailing_whitespace(CyString str)
 {
     return cy_string_trim_trailing(str, CY__WHITESPACE);
 }
 
-typedef struct {
-    const char *str;
-    isize len;
-} CyStringView;
-
-/* TODO(cya):
- * figure out the design of string views
- * update trimming functions to support unicode
- * more CyString procedures
- */
-<<<<<<< Updated upstream
-
-#endif /* _CY_H */
-=======
-=======
 /* ----------------------------- String views ------------------------------- */
 CyStringView cy_string_view_create_len(const char *str, isize len)
 {
@@ -1597,7 +1746,6 @@ CyStringView cy_string_view_create_len(const char *str, isize len)
         .len = len,
     };
 }
->>>>>>> 8841a63 (repurpose stack allocator)
 
 CyStringView cy_string_view_create(CyString str)
 {
@@ -1651,7 +1799,5 @@ b32 cy_string_view_contains(CyStringView str, const char *char_set)
     return false;
 }
 
->>>>>>> Stashed changes
 #endif // CY_IMPLEMENTATION
 #endif // _CY_H
->>>>>>> Stashed changes
