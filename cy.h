@@ -464,16 +464,16 @@ CY_DEF CyString cy_string_set(CyString str, const char *c_str);
 CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src);
 CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b);
 
-enum {
-    CY__STRING_TRIM_LEADING,
-    CY__STRING_TRIM_TRAILING,
-};
+typedef enum {
+    CY__STRING_TRIM_LEADING = 0x01,
+    CY__STRING_TRIM_TRAILING = 0x02,
+} CyStringTrimFlags;
 
 CY_DEF CyString cy_string_trim(CyString str, const char *char_set);
 CY_DEF CyString cy_string_trim_leading(CyString str, const char *char_set);
 CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set);
 CY_DEF CyString cy__string_trim_internal(
-    CyString str, const char *char_set, isize flags
+    CyString str, const char *char_set, CyStringTrimFlags flags
 );
 
 /* ----------------------------- String views ------------------------------- */
@@ -1667,7 +1667,7 @@ b32 cy_string_are_equal(const CyString a, const CyString b)
 }
 
 CyString cy__string_trim_internal(
-    CyString str, const char *char_set, isize flags
+    CyString str, const char *char_set, CyStringTrimFlags flags
 ) {
     char *start, *new_start;
     new_start = start = str;
