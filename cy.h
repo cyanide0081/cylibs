@@ -310,8 +310,8 @@ CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
 
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
-#define CY_STATIC_STR_LEN(str) ((sizeof(str) - 1) / sizeof(*(str)))
-#define CY_STATIC_ARR_LEN(arr) ((sizeof(arr)) / sizeof(*(arr)))
+#define CY_STATIC_STR_LEN(str) (isize)((sizeof(str) - 1) / sizeof(*(str)))
+#define CY_STATIC_ARR_LEN(arr) (isize)((sizeof(arr)) / sizeof(*(arr)))
 
 CY_DEF isize cy_str_len(const char *str);
 CY_DEF isize cy_utf8_codepoints(const char *str);
@@ -410,16 +410,18 @@ typedef struct {
 CyAllocatorProc cy_stack_allocator_proc;
 CY_DEF CyAllocator cy_stack_allocator(CyStack *stack);
 
-CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
 CY_DEF CyStackNode *cy_stack_insert_node(CyStack *stack, isize size);
+CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
+CY_DEF void cy_stack_deinit(CyStack *stack);
 
 /* TODO(cya):
- * add init_from_buffer proc to arena and other 'fixed' allocators
- * repurpose stack allocator
+ * add new behaviors to arena/stack allocators:
+ *     (page expansion, static backing buffers and scratch memory (ring bufs))
+ * bump allocator
  * bitmap allocator
  * pool allocator
+ * free-list allocator
  * buddy allocator
- * freelist allocator
  * extra allocator strategies from: https://www.youtube.com/watch?v=LIb3L4vKZ7U
  * general-purpose heap allocator composed of the basic ones to replace malloc
  */
@@ -1018,12 +1020,18 @@ inline CyArena cy_arena_init(CyAllocator backing, isize initial_size)
 
 inline void cy_arena_deinit(CyArena *arena)
 {
+    if (arena == NULL) {
+        return;
+    }
+
     CyArenaNode *cur_node = arena->state.first_node;
     while (cur_node != NULL) {
         CyArenaNode *next = cur_node->next;
         cy_free(arena->backing, cur_node);
         cur_node = next;
     }
+
+    cy_mem_set(arena, 0, sizeof(*arena));
 }
 
 CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
@@ -1106,24 +1114,32 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         }
 
         CyArenaNode *cur_node = arena->state.first_node;
-        intptr prev_offset;
-        b32 found_node = false;
+        isize prev_offset;
+        b32 is_in_range = false, found_node = false;
         while (cur_node != NULL) {
-            prev_offset = cur_node->prev_offset;
-            if (cur_node->buf + prev_offset == old_memory) {
-                found_node = true;
+            is_in_range = (u8*)old_mem >= cur_node->buf &&
+                (u8*)old_mem < (cur_node->buf + cur_node->size);
+            if (is_in_range) {
+                prev_offset = cur_node->prev_offset;
+                found_node = cur_node->buf + prev_offset == old_memory &&
+                    (cur_node->offset - cur_node->prev_offset == old_size);
                 break;
             }
 
             cur_node = cur_node->next;
         }
-        if (!found_node) {
-            // NOTE(cya): memory is not the latest allocation (making new one)
+        if (!is_in_range) {
+            CY_ASSERT_MSG(false, "out-of-bounds arena reallocation");
+            break;
+        } else if (!found_node) {
+            // NOTE(cya): is in valid space but is not the latest allocation
+            // (this might result in some odd behavior in some edge cases)
             void *new_mem = cy_alloc_align(a, size, align);
             CY_VALIDATE_PTR(new_mem);
 
             cy_mem_copy(new_mem, old_mem, old_size);
-            return new_mem;
+            ptr = new_mem;
+            break;
         }
 
         intptr aligned_offset = cy_align_forward(prev_offset, align);
@@ -1153,26 +1169,12 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 }
 
 /* -------------------------Stack Allocator Section ------------------------- */
-CY_DEF CyAllocator cy_stack_allocator(CyStack *stack)
+inline CyAllocator cy_stack_allocator(CyStack *stack)
 {
     return (CyAllocator){
         .data = stack,
         .proc = cy_stack_allocator_proc,
     };
-}
-
-inline CyStack cy_stack_init(CyAllocator backing, isize initial_size)
-{
-    isize default_size = CY_STACK_INIT_SIZE;
-    if (initial_size == 0) {
-        initial_size = default_size;
-    }
-
-    CyStack stack = {
-        .backing = backing,
-    };
-    stack.state.first_node = cy_stack_insert_node(&stack, initial_size);
-    return stack;
 }
 
 inline CyStackNode *cy_stack_insert_node(CyStack *stack, isize size)
@@ -1190,6 +1192,36 @@ inline CyStackNode *cy_stack_insert_node(CyStack *stack, isize size)
     stack->state.first_node = new_node;
 
     return new_node;
+}
+
+inline CyStack cy_stack_init(CyAllocator backing, isize initial_size)
+{
+    isize default_size = CY_STACK_INIT_SIZE;
+    if (initial_size == 0) {
+        initial_size = default_size;
+    }
+
+    CyStack stack = {
+        .backing = backing,
+    };
+    stack.state.first_node = cy_stack_insert_node(&stack, initial_size);
+    return stack;
+}
+
+inline void cy_stack_deinit(CyStack *stack)
+{
+    if (stack == NULL) {
+        return;
+    }
+
+    CyStackNode *cur_node = stack->state.first_node;
+    while (cur_node != NULL) {
+        CyStackNode *next = cur_node->next;
+        cy_free(stack->backing, cur_node);
+        cur_node = next;
+    }
+
+    cy_mem_set(stack, 0, sizeof(*stack));
 }
 
 CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
@@ -1213,19 +1245,16 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
             if (cur_node->next == NULL) {
                 isize largest_node_size = stack->state.first_node->size;
                 isize new_size = largest_node_size * CY_STACK_GROWTH_FACTOR;
+                isize max_alloc_size = align + sizeof(*header) + size;
 
-                cur_node = cy_stack_insert_node(stack, CY_MAX(new_size, size));
-                CY_VALIDATE_PTR(cur_node);
-
-                cur_addr = cur_node->buf + cur_node->offset;
-                padding = cy_calc_header_padding(
-                    (uintptr)cur_addr, align, sizeof(*header)
+                cur_node = cy_stack_insert_node(
+                    stack, CY_MAX(new_size, max_alloc_size)
                 );
-                alloc_end = cur_addr + padding + size;
-                break;
+                CY_VALIDATE_PTR(cur_node);
+            } else {
+                cur_node = cur_node->next;
             }
 
-            cur_node = cur_node->next;
             cur_addr = cur_node->buf + cur_node->offset;
             padding = cy_calc_header_padding(
                 (uintptr)cur_addr, align, sizeof(*header)
@@ -1233,15 +1262,13 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
             alloc_end = cur_addr + padding + size;
         }
 
-        u8 *alloc_start = cur_addr + padding;
-        header = (CyStackHeader*)alloc_start - 1;
+        ptr = cur_addr + padding;
+        header = (CyStackHeader*)ptr - 1;
         header->padding = padding;
         header->prev_offset = cur_node->offset;
 
         cur_node->prev_offset = header->prev_offset;
         cur_node->offset += size + padding;
-
-        ptr = alloc_start;
     } break;
     case CY_ALLOCATION_ALLOC_ALL: {
         CyAllocator backing = stack->backing;
@@ -1308,7 +1335,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
         CyStackNode *cur_node = stack->state.first_node;
         u8 *start = cur_node->buf;
         u8 *end = start + cur_node->size;
-        u8 *cur_addr = ptr;
+        u8 *cur_addr = old_mem;
         if (!(start <= cur_addr && cur_addr < end)) {
             CY_ASSERT_MSG(false, "out-of-bounds reallocation");
             break;
@@ -1317,6 +1344,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
             CY_ASSERT_MSG(false, "out-of-order reallocation");
             break;
         }
+
         b32 unchanged = old_size == size &&
             old_mem == cy_align_ptr_forward(old_mem, align);
         if (unchanged) {
@@ -1325,7 +1353,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
 
         CyStackHeader *header = (CyStackHeader*)cur_addr - 1;
         isize cur_padding = header->padding;
-        u8 *alloc_start = (u8*)header - cur_padding;
+        u8 *alloc_start = cur_addr - cur_padding;
         isize new_padding = cy_calc_header_padding(
             (uintptr)alloc_start, align, sizeof(*header)
         );
@@ -1337,7 +1365,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
         isize prev_offset = (isize)(cur_addr - cur_padding - start);
         isize new_offset = (isize)(alloc_start + new_padding + size - start);
         if (new_offset <= cur_node->size) {
-            u8 *new_addr = alloc_start + size + new_padding;
+            u8 *new_addr = alloc_start + new_padding;
             header = (CyStackHeader*)new_addr - 1;
             header->padding = new_padding;
             header->prev_offset = prev_offset;
@@ -1362,13 +1390,12 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
             (uintptr)cur_addr, align, sizeof(*header)
         );
 
-        alloc_start = cur_addr + new_padding;
-        header = (CyStackHeader*)alloc_start - 1;
+        ptr = cur_addr + new_padding;
+        header = (CyStackHeader*)ptr - 1;
         header->padding = new_padding;
         header->prev_offset = cur_node->offset;
 
         cur_node->offset += new_padding + size;
-        ptr = alloc_start;
     } break;
     }
 

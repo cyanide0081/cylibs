@@ -76,7 +76,7 @@ static void test_arena_allocator(void)
     isize txt_len = ftell(f);
     rewind(f);
 
-    CyArena arena = cy_arena_init(cy_heap_allocator(), txt_len + 1);
+    CyArena arena = cy_arena_init(cy_heap_allocator(), 0x4000);
     CyAllocator a = cy_arena_allocator(&arena);
     print_s("initialized arena");
 
@@ -97,19 +97,19 @@ static void test_arena_allocator(void)
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
     {
+        size_t shrunk_size = expanded_size / 4;
+        txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
+        TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in arena");
+
+        print_s("shrunk message buffer (%.2lfKB)", shrunk_size / KB);
+    }
+    {
         cy_free_all(a);
         TEST_ASSERT(
             arena.state.first_node->offset == 0, "unexpected arena offset"
         );
         f64 size = arena.state.first_node->size / KB;
         print_s("freed whole arena (Available size: %.2lfKB)", size);
-    }
-    {
-        size_t shrunk_size = expanded_size / 4;
-        txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
-        TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in arena");
-
-        print_s("shrunk message buffer (%.2lfKB)", shrunk_size / KB);
     }
     {
         CyArenaNode *first_node = arena.state.first_node;
@@ -157,7 +157,7 @@ static void test_stack_allocator(void)
     isize txt_len = ftell(f);
     rewind(f);
 
-    CyStack stack = cy_stack_init(cy_heap_allocator(), txt_len + 2);
+    CyStack stack = cy_stack_init(cy_heap_allocator(), 0x4000);
     CyAllocator a = cy_stack_allocator(&stack);
     print_s("initialized stack");
 
@@ -177,6 +177,39 @@ static void test_stack_allocator(void)
 
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
+    {
+        size_t shrunk_size = expanded_size / 4;
+        txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
+        TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in stack");
+
+        print_s("shrunk message buffer (%.2lfKB)", shrunk_size / KB);
+    }
+    {
+        cy_free_all(a);
+        TEST_ASSERT(
+            stack.state.first_node->offset == 0, "unexpected stack offset"
+        );
+        f64 size = stack.state.first_node->size / KB;
+        print_s("freed whole stack (Available size: %.2lfKB)", size);
+    }
+    {
+        const char *strs[] = {
+            "basolutely.",
+            "ok.",
+            "hmm.",
+        };
+        char *buf = NULL;
+        for (isize i = 0; i < CY_STATIC_ARR_LEN(strs); i++) {
+            buf = cy_alloc_string(a, strs[i]);
+            print_s("allocated string into stack: '%s'", buf);
+        }
+
+        cy_free(a, buf);
+        print_s("freed string from stack (LIFO check)");
+    }
+
+    cy_stack_deinit(&stack);
+    print_s("deinitialized stack");
 }
 
 static void test_cy_strings(void)
@@ -194,17 +227,8 @@ static void test_cy_strings(void)
 
     print_s("created new string '%s'", str);
 
-<<<<<<< HEAD
     const char *suffix = "我爱你";
-    str = cy_string_append_c(str, " ");
-    TEST_ASSERT_NOT_NULL(str, "unable to append string");
-    str = cy_string_append_c(str, suffix);
-=======
-    const char *other = "我爱你";
-    str = cy_string_append_c(str, " ");
-    TEST_ASSERT_NOT_NULL(str, "unable to append string");
-    str = cy_string_append_c(str, other);
->>>>>>> 8841a63 (repurpose stack allocator)
+    str = cy_string_append_fmt(str, " %s", suffix);
     TEST_ASSERT_NOT_NULL(str, "unable to append string");
     TEST_ASSERT(
         cy_string_len(str) == len + 1 + cy_str_len(suffix),
@@ -238,17 +262,15 @@ static void test_cy_strings(void)
     print_s("validated contents of duplicated string");
 
     isize old_len = cy_string_len(str);
-<<<<<<< HEAD
     str = cy_string_append_c(str, " \t  ");
     TEST_ASSERT_NOT_NULL(str, "unable to append to string");
-=======
+
     str = cy_string_append_c(str, " \t\t   ");
     str = cy_string_trim(str, " \t");
     TEST_ASSERT_NOT_NULL(str, "unable to trim string");
     TEST_ASSERT(
         cy_string_len(str) == old_len, "incorrectly trimmed string: '%s'", str
     );
->>>>>>> 8841a63 (repurpose stack allocator)
 
     print_s("appended whitespace to string, result: '%s'", str);
 
