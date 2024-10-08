@@ -319,7 +319,6 @@ CY_DEF isize cy_utf8_codepoints(const char *str);
 // NOTE(cya): for testing allocators and program behavior on OOM errors
 CyAllocatorProc cy_null_allocator_proc;
 CY_DEF CyAllocator cy_null_allocator(void);
-// CY_ALLOCATOR_PROC(cy_null_allocator_proc);
 
 // NOTE(cya): the default malloc-style heap allocator
 CyAllocatorProc cy_heap_allocator_proc;
@@ -417,6 +416,7 @@ CY_DEF void cy_stack_deinit(CyStack *stack);
 /* TODO(cya):
  * add new behaviors to arena/stack allocators:
  *     (page expansion, static backing buffers and scratch memory (ring bufs))
+ * virtual memory allocator (includes commit and reserve helper functions)
  * bump allocator
  * bitmap allocator
  * pool allocator
@@ -457,7 +457,7 @@ CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len);
 CY_DEF CyString cy_string_shrink(CyString str);
 
 CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len);
-CY_DEF CyString cy_string_append(CyString str, CyString other);
+CY_DEF CyString cy_string_append(CyString str, const CyString other);
 CY_DEF CyString cy_string_append_c(CyString str, const char *other);
 CY_DEF CyString cy_string_append_rune(CyString str, Rune r);
 CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...);
@@ -1591,7 +1591,7 @@ CyString cy_string_append_len(CyString str, const char *other, isize len)
     return str;
 }
 
-inline CyString cy_string_append(CyString str, CyString other)
+inline CyString cy_string_append(CyString str, const CyString other)
 {
     return cy_string_append_len(str, other, cy_string_len(other));
 }
@@ -1642,6 +1642,7 @@ CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
     va_list va;
     va_start(va, fmt);
 
+    // TODO(cya): maybe have some fancier size handling than this?
     char buf[0x1000] = {0};
     isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
 
