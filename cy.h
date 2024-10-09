@@ -317,11 +317,11 @@ CY_DEF isize cy_str_len(const char *str);
 CY_DEF isize cy_utf8_codepoints(const char *str);
 
 // NOTE(cya): for testing allocators and program behavior on OOM errors
-CyAllocatorProc cy_null_allocator_proc;
+CY_DEF CyAllocatorProc cy_null_allocator_proc;
 CY_DEF CyAllocator cy_null_allocator(void);
 
 // NOTE(cya): the default malloc-style heap allocator
-CyAllocatorProc cy_heap_allocator_proc;
+CY_DEF CyAllocatorProc cy_heap_allocator_proc;
 CY_DEF CyAllocator cy_heap_allocator(void);
 
 #define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
@@ -349,7 +349,7 @@ typedef struct {
     isize size;  // Total size of allocation (including aligned meta-chunk)
 } CyPageChunk;
 
-CyAllocatorProc cy_page_allocator_proc;
+CY_DEF CyAllocatorProc cy_page_allocator_proc;
 CY_DEF CyAllocator cy_page_allocator(void);
 
 // NOTE(cya): size of actual usable memory starting at *ptr
@@ -373,13 +373,13 @@ typedef struct {
     CyArenaState state;
 } CyArena;
 
-CyAllocatorProc cy_arena_allocator_proc;
+CY_DEF CyAllocatorProc cy_arena_allocator_proc;
 CY_DEF CyAllocator cy_arena_allocator(CyArena *arena);
 CY_DEF CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size);
 CY_DEF CyArena cy_arena_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_arena_deinit(CyArena *arena);
 
-/* -------------------------Stack Allocator Section ------------------------- */
+/* ------------------------- Stack Allocator Section ------------------------ */
 typedef struct CyStackNode {
     u8 *buf;
     isize size;
@@ -406,12 +406,32 @@ typedef struct {
 #define CY_STACK_INIT_SIZE     0x4000
 #define CY_STACK_GROWTH_FACTOR 2.0
 
-CyAllocatorProc cy_stack_allocator_proc;
+CY_DEF CyAllocatorProc cy_stack_allocator_proc;
 CY_DEF CyAllocator cy_stack_allocator(CyStack *stack);
 
 CY_DEF CyStackNode *cy_stack_insert_node(CyStack *stack, isize size);
 CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_stack_deinit(CyStack *stack);
+
+/* ------------------------- Pool Allocator Section ------------------------- */
+typedef struct CyPoolFreeNode {
+    struct CyPoolFreeNode *next;
+} CyPoolFreeNode;
+
+typedef struct {
+    u8 *buf;
+    isize len;
+    isize chunk_size;
+
+    CyPoolFreeNode *head;
+} CyPool;
+
+CY_DEF CyAllocatorProc cy_pool_allocator_proc;
+CY_DEF CyAllocator cy_pool_allocator(CyPool *pool);
+
+CY_DEF CyPool cy_pool_init(
+    void *backing_buf, isize size, isize chunk_size, isize chunk_align
+);
 
 /* TODO(cya):
  * add new behaviors to arena/stack allocators:
@@ -430,7 +450,7 @@ CY_DEF void cy_stack_deinit(CyStack *stack);
 CY_DEF const char *cy_char_first_occurence(const char *str, char c);
 CY_DEF const char *cy_char_last_occurence(const char *str, char c);
 
-/* ================================ Strings ================================= */
+/* ======================= Strings (and StringViews) ======================== */
 typedef char *CyString;
 
 typedef struct {
@@ -440,6 +460,11 @@ typedef struct {
 } CyStringHeader;
 
 #define CY_STRING_HEADER(str) ((CyStringHeader*)(str) - 1)
+
+typedef struct {
+    const u8 *text;
+    isize len;
+} CyStringView;
 
 CY_DEF isize cy_string_len(CyString str);
 CY_DEF isize cy_string_cap(CyString str);
@@ -452,16 +477,27 @@ CY_DEF void cy__string_set_cap(CyString str, isize cap);
 CY_DEF CyString cy_string_create_reserve(CyAllocator a, isize cap);
 CY_DEF CyString cy_string_create_len(CyAllocator a, const char *str, isize len);
 CY_DEF CyString cy_string_create(CyAllocator a, const char *str);
-CY_DEF void cy_string_free(CyString str);
 CY_DEF CyString cy_string_reserve_space_for(CyString str, isize extra_len);
 CY_DEF CyString cy_string_shrink(CyString str);
+CY_DEF void cy_string_free(CyString str);
 
-CY_DEF CyString cy_string_append_len(CyString str, const char *other, isize len);
+CY_DEF CyString cy_string_append_len(
+    CyString str, const char *other, isize len
+);
 CY_DEF CyString cy_string_append(CyString str, const CyString other);
 CY_DEF CyString cy_string_append_c(CyString str, const char *other);
 CY_DEF CyString cy_string_append_rune(CyString str, Rune r);
 CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...);
-CY_DEF CyString cy_string_pad_right(CyString str, isize width, Rune r);
+CY_DEF CyString cy_string_append_view(CyString str, CyStringView view);
+CY_DEF CyString cy_string_prepend_len(
+    CyString str, const char *other, isize len
+);
+CY_DEF CyString cy_string_prepend(CyString str, const CyString other);
+CY_DEF CyString cy_string_prepend_c(CyString str, const char *other);
+CY_DEF CyString cy_string_prepend_rune(CyString str, Rune r);
+CY_DEF CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...);
+CY_DEF CyString cy_string_prepend_view(CyString str, CyStringView view);
+CY_DEF CyString cy_string_pred_right(CyString str, isize width, Rune r);
 CY_DEF CyString cy_string_set(CyString str, const char *c_str);
 CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src);
 CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b);
@@ -477,12 +513,9 @@ CY_DEF CyString cy_string_trim_trailing(CyString str, const char *char_set);
 CY_DEF CyString cy__string_trim_internal(
     CyString str, const char *char_set, CyStringTrimFlags flags
 );
-
-/* ----------------------------- String views ------------------------------- */
-typedef struct {
-    const u8 *text;
-    isize len;
-} CyStringView;
+CY_DEF CyString cy_string_trim_whitespace(CyString str);
+CY_DEF CyString cy_string_trim_leading_whitespace(CyString str);
+CY_DEF CyString cy_string_trim_trailing_whitespace(CyString str);
 
 CY_DEF CyStringView cy_string_view_create_len(const char *str, isize len);
 CY_DEF CyStringView cy_string_view_create(CyString str);
@@ -492,7 +525,6 @@ CY_DEF CyStringView cy_string_view_substring(
     CyStringView str, isize begin_idx, isize end_idx
 );
 CY_DEF b32 cy_string_view_are_equal(CyStringView a, CyStringView b);
-CY_DEF CyString cy_string_append_view(CyString str, CyStringView view);
 CY_DEF b32 cy_string_view_has_prefix(CyStringView str, const char *prefix);
 CY_DEF b32 cy_string_view_contains(CyStringView str, const char *char_set);
 
@@ -747,7 +779,7 @@ inline isize cy_utf8_codepoints(const char *str)
     return count;
 }
 
-CyAllocator cy_null_allocator(void)
+inline CyAllocator cy_null_allocator(void)
 {
     return (CyAllocator){
         .proc = cy_null_allocator_proc,
@@ -764,17 +796,10 @@ CY_ALLOCATOR_PROC(cy_null_allocator_proc)
 
     void *ptr = NULL;
     switch(type) {
-    case CY_ALLOCATION_ALLOC: {
-    } break;
-    case CY_ALLOCATION_ALLOC_ALL: {
-    } break;
     case CY_ALLOCATION_FREE: {
         CY_ASSERT_MSG(old_mem == NULL, "null allocator: invalid pointer");
     } break;
-    case CY_ALLOCATION_FREE_ALL: {
-    } break;
-    case CY_ALLOCATION_RESIZE: {
-    } break;
+    default: break;
     }
 
     return ptr;
@@ -1402,6 +1427,27 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
     return ptr;
 }
 
+/* ------------------------- Pool Allocator Section ------------------------- */
+
+inline CyPool cy_pool_init(
+    void *backing_buf, isize size, isize chunk_size, isize chunk_align
+) {
+    u8 *start = backing_buf;
+    u8 *aligned_start = cy_align_ptr_forward(backing_buf, chunk_align);
+    isize backing_buf_size = aligned_start - start;
+
+    return (CyPool){
+        .buf = aligned_start,
+        .len = backing_buf_size,
+        .chunk_size = 0,
+    };
+}
+
+CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
+{
+    return NULL;
+}
+
 /* ============================== Char procs =============================== */
 const char *cy_char_first_occurence(const char *str, char c)
 {
@@ -1601,6 +1647,31 @@ inline CyString cy_string_append_c(CyString str, const char *other)
     return cy_string_append_len(str, other, cy_str_len(other));
 }
 
+CyString cy_string_append_rune(CyString str, Rune r)
+{
+    // TODO(cya): utf-8 encode rune
+    isize width = 1;
+    return cy_string_append_len(str, (const char*)&r, width);
+}
+
+CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+
+    // TODO(cya): maybe have some fancier size handling than this?
+    char buf[0x1000] = {0};
+    isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
+
+    va_end(va);
+    return cy_string_append_len(str, buf, len);
+}
+
+inline CyString cy_string_append_view(CyString str, CyStringView view)
+{
+    return cy_string_append_len(str, (const char*)view.text, view.len);
+}
+
 CyString cy_string_prepend_len(CyString str, const char *other, isize len)
 {
     if (len > 0) {
@@ -1630,14 +1701,14 @@ inline CyString cy_string_prepend_c(CyString str, const char *other)
     return cy_string_prepend_len(str, other, cy_str_len(other));
 }
 
-CyString cy_string_append_rune(CyString str, Rune r)
+CY_DEF CyString cy_string_prepend_rune(CyString str, Rune r)
 {
     // TODO(cya): utf-8 encode rune
     isize width = 1;
-    return cy_string_append_len(str, (const char*)&r, width);
+    return cy_string_prepend_len(str, (const char*)&r, width);
 }
 
-CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
+CY_DEF CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
@@ -1647,7 +1718,12 @@ CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
     isize len = vsnprintf(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
 
     va_end(va);
-    return cy_string_append_len(str, buf, len);
+    return cy_string_prepend_len(str, buf, len);
+}
+
+CY_DEF CyString cy_string_prepend_view(CyString str, CyStringView view)
+{
+    return cy_string_prepend_len(str, (const char*)view.text, view.len);
 }
 
 CyString cy_string_pad_right(CyString str, isize width, Rune r)
@@ -1749,7 +1825,7 @@ inline CyString cy_string_trim_trailing(CyString str, const char *char_set)
 
 inline CyString cy_string_trim_whitespace(CyString str)
 {
-    return cy_string_trim( str, CY__WHITESPACE);
+    return cy_string_trim(str, CY__WHITESPACE);
 }
 
 inline CyString cy_string_trim_leading_whitespace(CyString str)
@@ -1797,11 +1873,6 @@ CyStringView cy_string_view_substring(
 inline b32 cy_string_view_are_equal(CyStringView a, CyStringView b)
 {
     return (a.len == b.len) && (cy_mem_compare(a.text, b.text, a.len) == 0);
-}
-
-inline CyString cy_string_append_view(CyString str, CyStringView view)
-{
-    return cy_string_append_len(str, (const char*)view.text, view.len);
 }
 
 inline b32 cy_string_view_has_prefix(CyStringView str, const char *prefix)
