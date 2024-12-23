@@ -5,9 +5,8 @@
 // https://github.com/gingerBill/gb/blob/master/gb.h
 
 /******************************************************************************
- ******************************* DECLARATIONS *********************************
+ *                               DECLARATIONS                                 *
  ******************************************************************************/
-
 #if defined(_WIN32) || defined(_WIN64)
     #define CY_OS_WINDOWS 1
     #define _CRT_SECURE_NO_WARNINGS 1
@@ -201,12 +200,15 @@ typedef i32 Rune; // Unicode codepoint
 #include <stdio.h>   // for optional logging
 #include <stdarg.h>  // va_args
 
-// TODO(cya): implement printf family and move this stuff to some better place
-#define cy_printf_err(...) fprintf(stderr, __VA_ARGS__)
-#define cy_printf_err_va(fmt, va) vfprintf(stderr, fmt, va)
-
 #define CY_BIT(n) (1 << (n))
 #define CY_UNUSED(param) (void)(param)
+#define CY_SWAP(Type, a, b) { \
+    Type __tmp = a; \
+    a = b; \
+    b = __tmp; \
+} (void)0
+#define CY_IS_IN_RANGE_INCL(n, lo, hi) (n >= lo && n <= hi)
+#define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n > lo && n < hi)
 
 CY_DEF void cy_handle_assertion(
     const char *prefix,
@@ -251,6 +253,39 @@ typedef enum {
 CY_DEF CyTicks cy_ticks_query(void);
 CY_DEF CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end);
 CY_DEF f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit);
+
+/* ================================== Files ================================= */
+typedef struct {
+    i32 placeholder;
+} CyFile;
+
+typedef enum {
+    CY_FILE_STD_IN,
+    CY_FILE_STD_OUT,
+    CY_FILE_STD_ERR,
+} CyFileStdType;
+
+CY_DEF CyFile *cy_file_get_std(CyFileStdType type)
+{
+    // TODO(cya): implement
+    return NULL;
+}
+
+/* =================================== I/O ================================== */
+#define CY_IO_INTERNAL_BUF_SIZE 4096
+
+// TODO(cya): add gcc/clang type warning builtins
+CY_DEF isize cy_printf(const char *fmt, ...);
+CY_DEF isize cy_printf_err(const char *fmt, ...);
+
+CY_DEF isize cy_printf_va(const char *fmt, va_list va);
+CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
+
+CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...);
+CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
+
+CY_DEF isize cy_sprintf(char *buf, isize size, const char *fmt, ...);
+CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
 
 /* =============================== Allocators =============================== */
 typedef enum {
@@ -460,9 +495,36 @@ CY_DEF CyPool cy_pool_init(
 CY_DEF const char *cy_char_first_occurence(const char *str, char c);
 CY_DEF const char *cy_char_last_occurence(const char *str, char c);
 
+CY_DEF b32 cy_char_is_digit(char c);
+CY_DEF b32 cy_char_is_hex_digit(char c);
+
+CY_DEF i64 cy_digit_to_i64(char digit);
+CY_DEF i64 cy_hex_digit_to_i64(char digit);
+
 /* ============================ C-String procs ============================== */
 CY_DEF isize cy_str_len(const char *str);
 CY_DEF isize cy_wcs_len(const wchar_t *str);
+
+CY_DEF char *cy_str_copy(char *dst, const char *src);
+
+CY_DEF isize cy_str_compare(const char *a, const char *b);
+CY_DEF isize cy_str_compare_n(const char *a, const char *b, isize len);
+
+CY_DEF b32 cy_str_has_prefix(const char *str, const char *prefix);
+
+CY_DEF char *cy_str_rev(char *str);
+
+CY_DEF u64 cy_str_to_u64(const char *str, i32 base, isize *len_out);
+CY_DEF i64 cy_str_to_i64(const char *str, i32 base, isize *len_out);
+
+CY_DEF isize cy_str_parse_u64(u64 n, i32 base, char *dst);
+CY_DEF isize cy_str_parse_i64(i64 n, i32 base, char *dst);
+
+CY_DEF f32 cy_str_to_f32(const char *str, isize *len_out);
+CY_DEF f64 cy_str_to_f64(const char *str, isize *len_out);
+
+CY_DEF isize cy_str_parse_f32(f32 n, char *dst);
+CY_DEF isize cy_str_parse_f64(f64 n, char *dst);
 
 /* ======================= Strings (and StringViews) ======================== */
 typedef char *CyString;
@@ -605,9 +667,8 @@ CY_DEF b32 cy_string_16_view_contains(
 CY_DEF isize cy_utf8_codepoints(const char *str);
 
 /******************************************************************************
- ******************************* IMPLEMENTATION *******************************
+ *                               IMPLEMENTATION                               *
  ******************************************************************************/
-
 #ifdef CY_IMPLEMENTATION
 /* ================================= Runtime ================================ */
 void cy_handle_assertion(
@@ -741,6 +802,112 @@ inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
     return (f64)ticks.counter.tv_sec * unit +
         ticks.counter.tv_nsec / (1.0e9 / unit);
 #endif
+}
+
+/* =================================== I/O ================================== */
+inline isize cy_printf(const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    isize len = cy_printf_va(fmt, va);
+    va_end(va);
+
+    return len;
+}
+
+inline isize cy_printf_err(const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    isize len = cy_printf_err_va(fmt, va);
+    va_end(va);
+
+    return len;
+}
+
+inline isize cy_printf_va(const char *fmt, va_list va)
+{
+    return cy_fprintf_va(cy_file_get_std(CY_FILE_STD_OUT), fmt, va);
+}
+
+inline isize cy_printf_err_va(const char *fmt, va_list va)
+{
+    return cy_fprintf_va(cy_file_get_std(CY_FILE_STD_ERR), fmt, va);
+}
+
+inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    isize len = cy_fprintf_va(f, fmt, va);
+    va_end(va);
+
+    return len;
+}
+
+inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
+{
+    static char buf[CY_IO_INTERNAL_BUF_SIZE];
+    isize len = cy_sprintf_va(buf, CY_STATIC_ARR_LEN(buf), fmt, va);
+
+    // TODO(cya): write to file
+
+    return len;
+}
+
+inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    isize len = cy_sprintf_va(buf, size, fmt, va);
+    va_end(va);
+
+    return len;
+}
+
+enum {
+    CY__FMT_CHAR = CY_BIT(0),
+    CY__FMT_SHORT = CY_BIT(1),
+    CY__FMT_INT = CY_BIT(2),
+    CY__FMT_LONG = CY_BIT(3),
+    CY__FMT_LONG_LONG = CY_BIT(4),
+    CY__FMT_SIZE = CY_BIT(5),
+    CY__FMT_INTPTR = CY_BIT(6),
+
+    CY__FMT_INTS = CY__FMT_CHAR | CY__FMT_SHORT | CY__FMT_INT | CY__FMT_LONG |
+        CY__FMT_LONG_LONG | CY__FMT_SIZE | CY__FMT_INTPTR,
+
+    CY__FMT_UNSIGNED = CY_BIT(7),
+};
+
+typedef struct {
+    i32 base;
+    i32 flags;
+    i32 width;
+    i32 precision;
+} CyFmtInfo;
+
+isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
+{
+    char *end = buf;
+    for (char *c = fmt; *c != '\0'; c++) {
+        while (*c != '\0' && *c != '%') {
+            *end++ = *c;
+        }
+
+        if (*c++ == '\0') {
+            break;
+        }
+
+        switch (*c) {
+        case 'd':
+        case 'i': {
+
+        } break;
+        }
+    }
+
+    return 0;
 }
 
 /* =============================== Allocators =============================== */
@@ -1560,6 +1727,36 @@ const char *cy_char_last_occurence(const char *str, char c)
     return res;
 }
 
+inline b32 cy_char_is_digit(char c)
+{
+    return CY_IS_IN_RANGE_INCL(c, '0', '9');
+}
+
+inline b32 cy_char_is_hex_digit(char c)
+{
+    return CY_IS_IN_RANGE_INCL(c, '0', '9') ||
+        CY_IS_IN_RANGE_INCL(c, 'a', 'f') ||
+        CY_IS_IN_RANGE_INCL(c, 'A', 'F');
+}
+
+inline i64 cy_digit_to_i64(char digit)
+{
+    return cy_char_is_digit(digit) ? digit - '0' : digit - 'W';
+}
+
+inline i64 cy_hex_digit_to_i64(char digit)
+{
+    if (cy_char_is_digit(digit)) {
+        return digit - '0';
+    } else if (CY_IS_IN_RANGE_INCL(digit, 'a', 'f')) {
+        return 10 + digit - 'a';
+    } else if (CY_IS_IN_RANGE_INCL(digit, 'A', 'F')) {
+        return 10 + digit - 'A';
+    }
+
+    return -1;
+}
+
 /* ============================ C-String procs ============================== */
 inline isize cy_str_len(const char *str)
 {
@@ -1594,6 +1791,434 @@ inline isize cy_wcs_len(const wchar_t *str)
     }
 
     return len;
+}
+
+// TODO(cya): optimize(?)
+inline char *cy_str_copy(char *dst, const char *src)
+{
+    while (*src != '\0') {
+        *dst++ = *src++;
+    }
+
+    *dst = '\0';
+    return dst;
+}
+
+inline isize cy_str_compare(const char *a, const char *b) {
+    while (*a != '\0' && *a == *b) {
+        a += 1, b += 1;
+    }
+
+    return *(u8*)a - *(u8*)b;
+}
+
+inline isize cy_str_compare_n(const char *a, const char *b, isize len)
+{
+    while (len > 0) {
+        if (*a != *b) {
+            return *(u8*)a - *(u8*)b;
+        }
+
+        a += 1, b += 1;
+        len -= 1;
+    }
+
+    return 0;
+}
+
+inline b32 cy_str_has_prefix(const char *str, const char *prefix)
+{
+    while (*prefix != '\0') {
+        if (*str++ != *prefix++) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+inline char *cy_str_rev(char *str)
+{
+    char *s = str, *e = str + cy_str_len(str) - 1;
+    while (s < e) {
+        CY_SWAP(char, *s, *e);
+        s += 1, e -= 1;
+    }
+
+    return str;
+}
+
+cy_internal isize cy__scan_u64(const char *str, i32 base, u64 *value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+
+    const char *s = str;
+    u64 res = 0;
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        if (cy_char_is_digit(*s)) {
+            d = *s - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
+            d = cy_hex_digit_to_i64(*s);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    *value = res;
+    return s - str;
+}
+
+cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+
+    const char *s = str;
+    i64 res = 0;
+    b32 negative = false;
+    if (*s == '-') {
+        negative = true;
+        s += 1;
+    }
+
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        if (cy_char_is_digit(*s)) {
+            d = *s - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
+            d = cy_hex_digit_to_i64(*s);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    if (negative) {
+        res = -res;
+    }
+
+    *value = res;
+    return s - str;
+}
+
+u64 cy_str_to_u64(const char *str, i32 base, isize *len_out)
+{
+    if (base == 0) {
+        base = (cy_str_has_prefix(str, "0x")) ?  16 : 10;
+    }
+
+    u64 res;
+    isize len = cy__scan_u64(str, base, &res);
+    if (len_out != NULL) {
+        *len_out = len;
+    }
+
+    return res;
+}
+
+i64 cy_str_to_i64(const char *str, i32 base, isize *len_out)
+{
+    if (base == 0) {
+        const char *s = str;
+        if (*s == '-') {
+            s += 1;
+        }
+
+        base = (cy_str_has_prefix(s, "0x")) ? 16 : 10;
+    }
+
+    i64 res;
+    isize len = cy__scan_i64(str, base, &res);
+    if (len_out != NULL) {
+        *len_out = len;
+    }
+
+    return res;
+}
+
+static const char cy__num_to_char_table[] =
+    "0123456789"
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    "abcdefghijklmnopqrstuvwxyz"
+    "@$";
+
+isize cy_str_parse_u64(u64 n, i32 base, char *dst)
+{
+    char *c = dst;
+    if (n == 0) {
+        *c++ = '0';
+    } else {
+        while (n > 0) {
+            *c++ = cy__num_to_char_table[n % base];
+            n /= base;
+        }
+    }
+
+    *c = '\0';
+    cy_str_rev(dst);
+
+    return c - dst;
+}
+
+isize cy_str_parse_i64(i64 n, i32 base, char *dst)
+{
+    b32 negative = false;
+    if (n < 0) {
+        negative = true;
+        n = -n;
+    }
+
+    u64 v = (u64)n;
+    char *c = dst;
+    if (v == 0) {
+        *c++ = '0';
+    } else {
+        while (v > 0) {
+            *c++ = cy__num_to_char_table[v % base];
+            v /= base;
+        }
+    }
+
+    if (negative) {
+        *c++ = '-';
+    }
+
+    *c = '\0';
+    cy_str_rev(dst);
+
+    return c - dst;
+}
+
+inline f32 cy_str_to_f32(const char *str, isize *len_out)
+{
+    return (f32)cy_str_to_f64(str, len_out);
+}
+
+f64 cy_str_to_f64(const char *str, isize *len_out)
+{
+    const char *s = str;
+    f64 sign = 1.0;
+    if (*s == '-') {
+        sign = -1.0;
+        s += 1;
+    } else if (*s == '+') {
+        s += 1;
+    }
+
+    f64 val;
+    for (val = 0.0; cy_char_is_digit(*s); s++) {
+        val = val * 10.0 + (*s - '0');
+    }
+
+    if (*s == '.') {
+        s += 1;
+        f64 place = 0.1;
+        while (cy_char_is_digit(*s)) {
+            val += (*s - '0') * place;
+            place *= 0.1;
+            s += 1;
+        }
+    }
+
+    i32 frac = 0;
+    f64 scale = 1.0;
+    if (*s == 'e' || *s == 'E') {
+        s += 1;
+        if (*s == '-') {
+            frac = 1;
+            s += 1;
+        } else if (*s == '+') {
+            s += 1;
+        }
+
+        u32 exp;
+        for (exp = 0; cy_char_is_digit(*s); s++) {
+            exp = exp * 10 + (*s - '0');
+        }
+
+        // NOTE(cya): faster exponent calc
+        while (exp >= 50) {
+            scale *= 1e50;
+            exp -= 50;
+        }
+        while (exp >= 8) {
+            scale *= 1e8;
+            exp -= 8;
+        }
+        while (exp >= 1) {
+            scale *= 10.0;
+            exp -= 1;
+        }
+    }
+
+    f64 res = sign * frac == 0 ? (val * scale) : (val / scale);
+    if (len_out != NULL) {
+        *len_out = s - str;
+    }
+
+    return res;
+}
+
+isize cy_str_parse_f32(f32 n, char *dst)
+{
+    return (f32)cy_str_parse_f64(n, dst);
+}
+
+// TODO(cya): figure this out
+#define CY__NAN (0.0 / 0.0)
+#define CY__INF __builtin_inff64()
+
+#define CY_IS_NAN(n) (n == CY__NAN)
+#define CY_IS_INF(n) (n == +CY__INF || n == -CY__INF)
+
+typedef struct {
+    u32 integral;
+    u32 decimal;
+    i16 exponent;
+} CyFloatParts;
+
+#define CY__BIN_EXP_POS(val, exp, b) { \
+    if (val >= 1e##b) { \
+        val /= 1e##b; \
+        exp += b; \
+    } \
+} (void)0
+#define CY__BIN_EXP_NEG(val, exp, b, b1) { \
+    if (val < 1e-##b1) { \
+        val *= 1e##b; \
+        exp -= b; \
+    } \
+} (void)0
+
+cy_internal inline i16 cy__normalize_f64(f64 *val)
+{
+    const f64 exp_threshold_neg = 1e-5;
+    const f64 exp_threshold_pos = 1e7;
+
+    i16 exp = 0;
+    f64 value = *val;
+    if (value > exp_threshold_pos) {
+        CY__BIN_EXP_POS(value, exp, 256);
+        CY__BIN_EXP_POS(value, exp, 128);
+        CY__BIN_EXP_POS(value, exp, 64);
+        CY__BIN_EXP_POS(value, exp, 32);
+        CY__BIN_EXP_POS(value, exp, 8);
+        CY__BIN_EXP_POS(value, exp, 4);
+        CY__BIN_EXP_POS(value, exp, 2);
+        CY__BIN_EXP_POS(value, exp, 1);
+    } else if (value > 0.0 && value <= exp_threshold_neg) {
+        CY__BIN_EXP_NEG(value, exp, 256, 255);
+        CY__BIN_EXP_NEG(value, exp, 128, 127);
+        CY__BIN_EXP_NEG(value, exp, 64, 63);
+        CY__BIN_EXP_NEG(value, exp, 32, 31);
+        CY__BIN_EXP_NEG(value, exp, 8, 7);
+        CY__BIN_EXP_NEG(value, exp, 4, 3);
+        CY__BIN_EXP_NEG(value, exp, 2, 1);
+        CY__BIN_EXP_NEG(value, exp, 1, 0);
+    }
+
+    *val = value;
+    return exp;
+}
+
+cy_internal inline CyFloatParts cy__split_f64(f64 val)
+{
+    i16 exponent = cy__normalize_f64(&val);
+    u32 integral = (u32)val;
+    f64 remainder = (val - (f64)integral) * 1e9;
+
+    u32 decimal = (u32)remainder;
+    remainder -= decimal;
+    if (remainder > 0.5) {
+        decimal += 1;
+        if (decimal >= 1e9) {
+            decimal = 0;
+            integral += 1;
+            if (exponent != 0 && integral >= 10) {
+                exponent += 1;
+                integral = 1;
+            }
+        }
+    }
+
+    return (CyFloatParts){
+        .integral = integral,
+        .decimal = decimal,
+        .exponent = exponent,
+    };
+}
+
+cy_internal inline isize cy__str_parse_decimal(u32 value, char *dst)
+{
+    isize width = 9;
+    while (value % 10 == 0 && width > 0) {
+        value /= 10;
+        width -= 1;
+    }
+
+    char *c = dst;
+    while (width-- > 0) {
+        *c++ = cy__num_to_char_table[value % 10];
+        value /= 10;
+    }
+
+    *c = '\0';
+    cy_str_rev(dst);
+
+    return c - dst;
+}
+
+// NOTE(cya): this doesn't allow for customizing the formatting of the value
+// (parses up to 9 significant decimals and normalizes the number)
+// - make sure you write this to a buffer with at least 22 chars of capacity
+// (excluding the null byte)
+isize cy_str_parse_f64(f64 n, char *dst)
+{
+    char *cur = dst;
+    if (CY_IS_NAN(n)) {
+        return cy_str_copy(cur, "NaN") - dst;
+    }
+
+    if (n < 0.0) {
+        *cur++ = '-';
+        n = -n;
+    }
+
+    if (CY_IS_INF(n)) {
+        return cy_str_copy(cur, "Inf") - dst;
+    }
+
+    CyFloatParts parts = cy__split_f64(n);
+    cur += cy_str_parse_u64(parts.integral, 10, cur);
+    if (parts.decimal > 0) {
+        *cur++ = '.';
+        cur += cy__str_parse_decimal(parts.decimal, cur);
+    }
+
+    if (parts.exponent != 0) {
+        *cur++ = 'e';
+        cur += cy_str_parse_i64(parts.exponent, 10, cur);
+    }
+
+    *cur = '\0';
+    return cur - dst;
 }
 
 /* ================================ Strings ================================= */
@@ -2028,6 +2653,7 @@ b32 cy_string_view_contains(CyStringView str, const char *char_set)
 }
 
 /* =========================== Strings (UTF-16) ============================= */
+#if defined(CY_OS_WINDOWS)
 #define CY__U16S_TO_BYTES(c) ((c) * sizeof(u16))
 
 inline isize cy_string_16_len(CyString16 str)
@@ -2334,6 +2960,7 @@ b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set)
 
     return false;
 }
+#endif // CY_OS_WINDOWS
 
 /* ============================ Unicode helpers ============================= */
 CY_DEF isize cy_utf8_codepoints(const char *str);
