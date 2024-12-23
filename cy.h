@@ -866,18 +866,31 @@ inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
 }
 
 enum {
-    CY__FMT_CHAR = CY_BIT(0),
-    CY__FMT_SHORT = CY_BIT(1),
-    CY__FMT_INT = CY_BIT(2),
-    CY__FMT_LONG = CY_BIT(3),
-    CY__FMT_LONG_LONG = CY_BIT(4),
-    CY__FMT_SIZE = CY_BIT(5),
-    CY__FMT_INTPTR = CY_BIT(6),
+    CY__FMT_DONE = CY_BIT(0),
+
+    CY__FMT_PLUS = CY_BIT(1),
+    CY__FMT_MINUS = CY_BIT(2),
+    CY__FMT_SPACE = CY_BIT(3),
+    CY__FMT_ZERO = CY_BIT(4),
+    CY__FMT_APOS = CY_BIT(5),
+    CY__FMT_HASH = CY_BIT(6),
+
+    CY__FMT_CHAR = CY_BIT(7),
+    CY__FMT_SHORT = CY_BIT(8),
+    CY__FMT_INT = CY_BIT(9),
+    CY__FMT_LONG = CY_BIT(10),
+    CY__FMT_LONG_LONG = CY_BIT(11),
+    CY__FMT_SIZE = CY_BIT(12),
+    CY__FMT_INTPTR = CY_BIT(13),
 
     CY__FMT_INTS = CY__FMT_CHAR | CY__FMT_SHORT | CY__FMT_INT | CY__FMT_LONG |
         CY__FMT_LONG_LONG | CY__FMT_SIZE | CY__FMT_INTPTR,
 
-    CY__FMT_UNSIGNED = CY_BIT(7),
+    CY__FMT_UNSIGNED = CY_BIT(14),
+
+    CY__FMT_FLOAT = CY_BIT(15),
+    CY__FMT_CHARACTER = CY_BIT(16),
+    CY__FMT_STRING = CY_BIT(17),
 };
 
 typedef struct {
@@ -889,6 +902,7 @@ typedef struct {
 
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
+    CyFmtInfo info = {0};
     char *end = buf;
     for (char *c = fmt; *c != '\0'; c++) {
         while (*c != '\0' && *c != '%') {
@@ -902,7 +916,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         switch (*c) {
         case 'd':
         case 'i': {
-
+            info.flags |= CY__FMT_INT;
         } break;
         }
     }
