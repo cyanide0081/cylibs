@@ -210,6 +210,12 @@ typedef i32 Rune; // Unicode codepoint
 #define CY_IS_IN_RANGE_INCL(n, lo, hi) (n >= lo && n <= hi)
 #define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n > lo && n < hi)
 
+// TODO(cya): figure out how to check for availability of these builtins
+#define CY__INF __builtin_inff64()
+
+#define CY_IS_NAN(n) (__builtin_isnan(n))
+#define CY_IS_INF(n) (n == +CY__INF || n == -CY__INF)
+
 CY_DEF void cy_handle_assertion(
     const char *prefix,
     const char *cond,
@@ -498,6 +504,12 @@ CY_DEF const char *cy_char_last_occurence(const char *str, char c);
 CY_DEF b32 cy_char_is_digit(char c);
 CY_DEF b32 cy_char_is_hex_digit(char c);
 
+CY_DEF b32 cy_char_is_lower(char c);
+CY_DEF b32 cy_char_is_upper(char c);
+
+CY_DEF char cy_char_to_lower(char c);
+CY_DEF char cy_char_to_upper(char c);
+
 CY_DEF i64 cy_digit_to_i64(char digit);
 CY_DEF i64 cy_hex_digit_to_i64(char digit);
 
@@ -512,7 +524,8 @@ CY_DEF isize cy_str_compare_n(const char *a, const char *b, isize len);
 
 CY_DEF b32 cy_str_has_prefix(const char *str, const char *prefix);
 
-CY_DEF char *cy_str_rev(char *str);
+CY_DEF char *cy_str_reverse(char *str);
+CY_DEF char *cy_str_reverse_n(char *str, isize len);
 
 CY_DEF u64 cy_str_to_u64(const char *str, i32 base, isize *len_out);
 CY_DEF i64 cy_str_to_i64(const char *str, i32 base, isize *len_out);
@@ -866,31 +879,36 @@ inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
 }
 
 enum {
-    CY__FMT_DONE = CY_BIT(0),
-
+    // NOTE(cya): flags
+    CY__FMT_MINUS = CY_BIT(0),
     CY__FMT_PLUS = CY_BIT(1),
-    CY__FMT_MINUS = CY_BIT(2),
-    CY__FMT_SPACE = CY_BIT(3),
+    CY__FMT_SPACE = CY_BIT(2),
+    CY__FMT_HASH = CY_BIT(3),
     CY__FMT_ZERO = CY_BIT(4),
-    CY__FMT_APOS = CY_BIT(5),
-    CY__FMT_HASH = CY_BIT(6),
 
-    CY__FMT_CHAR = CY_BIT(7),
-    CY__FMT_SHORT = CY_BIT(8),
-    CY__FMT_INT = CY_BIT(9),
-    CY__FMT_LONG = CY_BIT(10),
-    CY__FMT_LONG_LONG = CY_BIT(11),
-    CY__FMT_SIZE = CY_BIT(12),
-    CY__FMT_INTPTR = CY_BIT(13),
+    // NOTE(cya): length modifiers
+    CY__FMT_LEN_CHAR = CY_BIT(5),
+    CY__FMT_LEN_SHORT = CY_BIT(6),
+    CY__FMT_LEN_LONG = CY_BIT(7),
+    CY__FMT_LEN_LONG_LONG = CY_BIT(8),
+    CY__FMT_LEN_INTMAX = CY_BIT(9),
+    CY__FMT_LEN_SIZE = CY_BIT(10),
+    CY__FMT_LEN_PTRDIFF = CY_BIT(11),
+    CY__FMT_LEN_LONG_DOUBLE = CY_BIT(12),
 
-    CY__FMT_INTS = CY__FMT_CHAR | CY__FMT_SHORT | CY__FMT_INT | CY__FMT_LONG |
-        CY__FMT_LONG_LONG | CY__FMT_SIZE | CY__FMT_INTPTR,
+    CY__FMT_LEN_MODS = CY__FMT_LEN_CHAR | CY__FMT_LEN_SHORT | CY__FMT_LEN_LONG |
+        CY__FMT_LEN_LONG_LONG | CY__FMT_LEN_INTMAX | CY__FMT_LEN_SIZE |
+        CY__FMT_LEN_PTRDIFF | CY__FMT_LEN_LONG_DOUBLE,
 
+    // NOTE(cya): conversion specifiers
+    CY__FMT_INT = CY_BIT(13),
     CY__FMT_UNSIGNED = CY_BIT(14),
-
     CY__FMT_FLOAT = CY_BIT(15),
-    CY__FMT_CHARACTER = CY_BIT(16),
-    CY__FMT_STRING = CY_BIT(17),
+
+    // NOTE(cya): conversion style modifiers
+    CY__FMT_STYLE_EXP = CY_BIT(20), // e, E
+    CY__FMT_STYLE_AUTO = CY_BIT(21), // g, G
+    CY__FMT_STYLE_UPPER = CY_BIT(22),
 };
 
 typedef struct {
@@ -900,28 +918,495 @@ typedef struct {
     i32 precision;
 } CyFmtInfo;
 
-isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
+static const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
+static const char cy__num_to_char_table_lower[] = "0123456789abcdef";
+
+cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 {
-    CyFmtInfo info = {0};
-    char *end = buf;
-    for (char *c = fmt; *c != '\0'; c++) {
-        while (*c != '\0' && *c != '%') {
-            *end++ = *c;
-        }
-
-        if (*c++ == '\0') {
-            break;
-        }
-
-        switch (*c) {
-        case 'd':
-        case 'i': {
-            info.flags |= CY__FMT_INT;
-        } break;
+    const char *table = info->flags & CY__FMT_STYLE_UPPER ?
+        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
+    i32 base = info->base;
+    char *c = dst;
+    if (n == 0) {
+        *c++ = '0';
+    } else {
+        while (n > 0 && cap-- > 0) {
+            *c++ = table[n % base];
+            n /= base;
         }
     }
 
-    return 0;
+    isize len = c - dst;
+    cy_str_reverse_n(dst, len);
+    return len;
+}
+
+cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
+{
+    const char *table = info->flags & CY__FMT_STYLE_UPPER ?
+        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
+    i32 base = info->base;
+    b32 negative = false;
+    if (n < 0) {
+        negative = true;
+        n = -n;
+    }
+
+    u64 v = (u64)n;
+    char *c = dst;
+    if (v == 0) {
+        *c++ = '0';
+    } else {
+        while (v > 0 && cap-- > 0) {
+            *c++ = table[v % base];
+            v /= base;
+        }
+    }
+
+    if (negative && cap > 0) {
+        *c++ = '-';
+    } else if (info->flags & CY__FMT_PLUS) {
+        *c++ = '+';
+    }
+
+    isize len = c - dst;
+    cy_str_reverse_n(dst, len);
+    return len;
+}
+
+cy_internal inline char *cy__str_print(char *dst, const char *src, isize max)
+{
+    while (*src != '\0' && max-- > 0) {
+        *dst++ = *src++;
+    }
+
+    return dst;
+}
+
+// NOTE(cya): binary exponentiation for floats
+#define CY__BIN_EXP_POS(val, exp, b) { \
+    if (val >= 1e##b) { \
+        val /= 1e##b; \
+        exp += b; \
+    } \
+} (void)0
+#define CY__BIN_EXP_NEG(val, exp, b, b1) { \
+    if (val < 1e-##b1) { \
+        val *= 1e##b; \
+        exp -= b; \
+    } \
+} (void)0
+
+static u64 cy__power_of_ten_table[] = {
+    1e0, 1e1, 1e2, 1e3, 1e4,
+    1e5, 1e6, 1e7, 1e8, 1e9,
+    1e10, 1e11, 1e12, 1e13, 1e14,
+    1e15, 1e16
+};
+
+cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
+{
+    CY_ASSERT(cap > 0);
+
+    isize remaining = cap;
+    char *cur = dst;
+    if (CY_IS_NAN(n)) {
+        const char *s = info->flags & CY__FMT_STYLE_UPPER ? "NAN" : "nan";
+        return cy__str_print(cur, s, cap) - dst;
+    }
+
+    if (n < 0.0) {
+        *cur++ = '-';
+        remaining -= 1;
+        n = -n;
+    }
+
+    if (CY_IS_INF(n)) {
+        const char *s = info->flags & CY__FMT_STYLE_UPPER ? "INF" : "inf";
+        return cy__str_print(cur, s, cap) - dst;
+    }
+
+    b32 style_exp = info->flags & CY__FMT_STYLE_EXP;
+    b32 style_auto = info->flags & CY__FMT_STYLE_AUTO;
+
+    i32 precision = info->precision;
+    i16 exponent = 0;
+    f64 normalized = n;
+    if (style_exp || style_auto) {
+        // TODO(cya): test this out
+        if (n >= 1e1) {
+            CY__BIN_EXP_POS(normalized, exponent, 256);
+            CY__BIN_EXP_POS(normalized, exponent, 128);
+            CY__BIN_EXP_POS(normalized, exponent, 64);
+            CY__BIN_EXP_POS(normalized, exponent, 32);
+            CY__BIN_EXP_POS(normalized, exponent, 8);
+            CY__BIN_EXP_POS(normalized, exponent, 4);
+            CY__BIN_EXP_POS(normalized, exponent, 2);
+            CY__BIN_EXP_POS(normalized, exponent, 1);
+        } else if (n > 0.0 && n <= 1e-1) {
+            CY__BIN_EXP_NEG(normalized, exponent, 256, 255);
+            CY__BIN_EXP_NEG(normalized, exponent, 128, 127);
+            CY__BIN_EXP_NEG(normalized, exponent, 64, 63);
+            CY__BIN_EXP_NEG(normalized, exponent, 32, 31);
+            CY__BIN_EXP_NEG(normalized, exponent, 8, 7);
+            CY__BIN_EXP_NEG(normalized, exponent, 4, 3);
+            CY__BIN_EXP_NEG(normalized, exponent, 2, 1);
+            CY__BIN_EXP_NEG(normalized, exponent, 1, 0);
+        }
+    }
+
+    b32 swap = style_exp ||
+        (style_auto && (exponent < -4 || exponent >= precision));
+    if (swap) {
+        n = normalized;
+    }
+
+    u64 integral = (u64)n;
+    f64 remainder = (n - (f64)integral) * cy__power_of_ten_table[precision];
+    u64 decimal = (u64)remainder;
+
+    remainder -= decimal;
+    if (remainder > 0.5) {
+        decimal += 1;
+        if (decimal >= 1e9) {
+            decimal = 0;
+            integral += 1;
+            if (exponent != 0 && integral >= 10) {
+                exponent += 1;
+                integral = 1;
+            }
+        }
+    }
+
+    isize len = cy__print_u64(cur, remaining, info, integral);
+    cur += len, remaining -= len;
+
+    if (precision > 0 && decimal > 0 && remaining > 1) {
+        *cur++ = '.';
+        remaining -= 1;
+
+        if (info->flags & CY__FMT_STYLE_AUTO) {
+            while (decimal % 10 == 0 && precision > 0) {
+                decimal /= 10;
+                precision -= 1;
+            }
+        }
+
+        char *c = cur;
+        while (precision-- > 0) {
+            *c++ = cy__num_to_char_table_upper[decimal % 10];
+            decimal /= 10;
+        }
+
+        len = c - cur;
+        cy_str_reverse_n(cur, len);
+
+        cur += len, remaining -= len;
+    }
+
+    if (exponent != 0 && remaining > 1) {
+        *cur++ = 'e';
+        remaining -= 1;
+
+        info->flags |= CY__FMT_PLUS;
+        len = cy__print_i64(cur, remaining, info, exponent);
+        cur += len, remaining -= len;
+    }
+
+    return cur - dst;
+}
+
+cy_internal isize cy__scan_u64(const char *str, i32 base, u64 *value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+
+    const char *s = str;
+    u64 res = 0;
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        if (cy_char_is_digit(*s)) {
+            d = *s - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
+            d = cy_hex_digit_to_i64(*s);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    *value = res;
+    return s - str;
+}
+
+cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
+{
+    if (value == NULL) {
+        return 0;
+    }
+
+    const char *s = str;
+    i64 res = 0;
+    b32 negative = false;
+    if (*s == '-') {
+        negative = true;
+        s += 1;
+    }
+
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        if (cy_char_is_digit(*s)) {
+            d = *s - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
+            d = cy_hex_digit_to_i64(*s);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    if (negative) {
+        res = -res;
+    }
+
+    *value = res;
+    return s - str;
+}
+
+// TODO(cya): implement extended format specifiers
+// * %q for bools
+// * %b for binary int
+// * %cs for cystrings
+// * %cv for cystringviews
+isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
+{
+    isize remaining = size;
+    char *end = buf;
+    const char *f = fmt;
+    for (;;) {
+        while (*f != '\0' && *f != '%' && remaining > 0) {
+            *end++ = *f++;
+            remaining -= 1;
+        }
+
+        if (*f++ == '\0' || remaining == 0) {
+            break;
+        }
+
+        CyFmtInfo info = {.precision = -1};
+        switch (*f++) {
+        case 'h': {
+            if (*f == 'h') {
+                info.flags |= CY__FMT_LEN_CHAR;
+                f += 1;
+            } else {
+                info.flags |= CY__FMT_LEN_SHORT;
+            }
+        } break;
+        case 'l': {
+            if (*f == 'l') {
+                info.flags |= CY__FMT_LEN_LONG_LONG;
+                f += 1;
+            } else {
+                info.flags |= CY__FMT_LEN_LONG;
+            }
+        } break;
+        case 'j': {
+            info.flags |= CY__FMT_LEN_INTMAX;
+        } break;
+        case 'z': {
+            info.flags |= CY__FMT_LEN_SIZE;
+        } break;
+        case 't': {
+            info.flags |= CY__FMT_LEN_PTRDIFF;
+        } break;
+        case 'L': {
+            info.flags |= CY__FMT_LEN_LONG_DOUBLE;
+        } break;
+        default: {
+            f -= 1;
+        } break;
+        }
+
+        switch (*f) {
+        case 'd':
+        case 'i': {
+            info.flags |= CY__FMT_INT;
+            info.base = 10;
+        } break;
+        case 'o':
+        case 'u':
+        case 'x':
+        case 'X': {
+            info.flags |= CY__FMT_UNSIGNED;
+            switch (*f) {
+            case 'o': {
+                info.base = 8;
+            } break;
+            case 'u': {
+                info.base = 10;
+            } break;
+            case 'x':
+            case 'X': {
+                info.base = 16;
+                if (cy_char_is_upper(*f)) {
+                    info.flags |= CY__FMT_STYLE_UPPER;
+                }
+            } break;
+            }
+        } break;
+        case 'f':
+        case 'F':
+        case 'e':
+        case 'E':
+        case 'g':
+        case 'G':
+        case 'a':
+        case 'A': {
+            info.flags |= CY__FMT_FLOAT;
+            info.base = 10;
+            switch (cy_char_to_lower(*f)) {
+            case 'e': {
+                info.flags |= CY__FMT_STYLE_EXP;
+            } break;
+            case 'g': {
+                info.flags |= CY__FMT_STYLE_AUTO;
+            } break;
+            case 'a': {
+                info.base = 16;
+            } break;
+            }
+
+            if (cy_char_is_upper(*f)) {
+                info.flags |= CY__FMT_STYLE_UPPER;
+            }
+        } break;
+        case 'c': {
+            *end++ = (u8)va_arg(va, int);
+        } break;
+        case 's': {
+            const char *str = va_arg(va, char*);
+            while (*str != '\0' && remaining > 0) {
+                *end++ = *str++;
+                remaining -= 1;
+            }
+        } break;
+        case 'p': {
+
+        } break;
+        case 'n': {
+            int *out = va_arg(va, int*);
+            if (out == NULL) {
+                break;
+            }
+
+            *out = (int)(end - buf);
+        } break;
+        case '%': {
+            *end++ = '%';
+            remaining -= 1;
+        } break;
+        default: {
+            // TODO(cya): no fmt spec = stop writing at all or just ignore?
+            continue;
+        } break;
+        }
+
+        f += 1;
+        if (*f == '\0' || remaining == 0) {
+            break;
+        } else if (info.base == 0) {
+            continue;
+        }
+
+        // NOTE(cya): print a number
+        isize len = 0;
+        if (info.flags & CY__FMT_UNSIGNED) {
+            u64 val;
+            switch (info.flags & CY__FMT_LEN_MODS) {
+            case CY__FMT_LEN_CHAR: {
+                val = (u64)((u8)va_arg(va, int));
+            } break;
+            case CY__FMT_LEN_SHORT: {
+                val = (u64)((u16)va_arg(va, int));
+            } break;
+            case CY__FMT_LEN_LONG: {
+                val = (u64)va_arg(va, unsigned long);
+            } break;
+            case CY__FMT_LEN_LONG_LONG: {
+                val = (u64)va_arg(va, unsigned long long);
+            } break;
+            case CY__FMT_LEN_INTMAX: {
+                val = (u64)va_arg(va, uintmax_t);
+            } break;
+            case CY__FMT_LEN_SIZE: {
+                val = (u64)va_arg(va, usize);
+            } break;
+            case CY__FMT_LEN_PTRDIFF: {
+                val = (u64)va_arg(va, ptrdiff_t);
+            } break;
+            default: {
+                val = (u64)va_arg(va, unsigned);
+            } break;
+            }
+
+            len = cy__print_u64(end, remaining, &info, val);
+        } else if (info.flags & CY__FMT_INT) {
+            i64 val;
+            switch (info.flags & CY__FMT_LEN_MODS) {
+            case CY__FMT_LEN_CHAR: {
+                val = (i64)((i8)va_arg(va, int));
+            } break;
+            case CY__FMT_LEN_SHORT: {
+                val = (i64)((i16)va_arg(va, int));
+            } break;
+            case CY__FMT_LEN_LONG: {
+                val = (i64)va_arg(va, long);
+            } break;
+            case CY__FMT_LEN_LONG_LONG: {
+                val = (i64)va_arg(va, long long);
+            } break;
+            case CY__FMT_LEN_INTMAX: {
+                val = (i64)va_arg(va, intmax_t);
+            } break;
+            case CY__FMT_LEN_SIZE: {
+                val = (i64)va_arg(va, isize);
+            } break;
+            case CY__FMT_LEN_PTRDIFF: {
+                val = (i64)va_arg(va, ptrdiff_t);
+            } break;
+            default: {
+                val = (i64)va_arg(va, int);
+            } break;
+            }
+
+            len = cy__print_i64(end, remaining, &info, val);
+        } else if (info.flags & CY__FMT_FLOAT) {
+            info.precision = (info.precision == -1) ?
+                6 : CY_MIN(info.precision, 16);
+
+            f64 val = va_arg(va, f64);
+            len = cy__print_f64(end, remaining, &info, val);
+        }
+
+        end += len, remaining -= len;
+    }
+
+    *end = '\0';
+    return end - buf;
 }
 
 /* =============================== Allocators =============================== */
@@ -1743,14 +2228,32 @@ const char *cy_char_last_occurence(const char *str, char c)
 
 inline b32 cy_char_is_digit(char c)
 {
-    return CY_IS_IN_RANGE_INCL(c, '0', '9');
+    return c - '0' < 10;
 }
 
 inline b32 cy_char_is_hex_digit(char c)
 {
-    return CY_IS_IN_RANGE_INCL(c, '0', '9') ||
+    return cy_char_is_digit(c) ||
         CY_IS_IN_RANGE_INCL(c, 'a', 'f') ||
         CY_IS_IN_RANGE_INCL(c, 'A', 'F');
+}
+
+inline b32 cy_char_is_lower(char c)
+{
+    return CY_IS_IN_RANGE_INCL(c, 'a', 'z');
+}
+
+inline b32 cy_char_is_upper(char c)
+{
+    return c - 0x41 < 26;
+}
+
+inline char cy_char_to_lower(char c) {
+    return cy_char_is_upper(c) ? c + ('a' - 'A') : c;
+}
+
+inline char cy_char_to_upper(char c) {
+    return cy_char_is_lower(c) ? c - ('a' - 'A') : c;
 }
 
 inline i64 cy_digit_to_i64(char digit)
@@ -1851,7 +2354,7 @@ inline b32 cy_str_has_prefix(const char *str, const char *prefix)
     return true;
 }
 
-inline char *cy_str_rev(char *str)
+inline char *cy_str_reverse(char *str)
 {
     char *s = str, *e = str + cy_str_len(str) - 1;
     while (s < e) {
@@ -1862,74 +2365,15 @@ inline char *cy_str_rev(char *str)
     return str;
 }
 
-cy_internal isize cy__scan_u64(const char *str, i32 base, u64 *value)
+inline char *cy_str_reverse_n(char *str, isize len)
 {
-    if (value == NULL) {
-        return 0;
+    char *s = str, *e = str + len - 1;
+    while (s < e) {
+        CY_SWAP(char, *s, *e);
+        s += 1, e -= 1;
     }
 
-    const char *s = str;
-    u64 res = 0;
-    if (base == 16 && cy_str_has_prefix(s, "0x")) {
-        s += 2;
-    }
-
-    for (;;) {
-        i64 d;
-        if (cy_char_is_digit(*s)) {
-            d = *s - '0';
-        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
-            d = cy_hex_digit_to_i64(*s);
-        } else {
-            break;
-        }
-
-        res = res * base + d;
-        s += 1;
-    }
-
-    *value = res;
-    return s - str;
-}
-
-cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
-{
-    if (value == NULL) {
-        return 0;
-    }
-
-    const char *s = str;
-    i64 res = 0;
-    b32 negative = false;
-    if (*s == '-') {
-        negative = true;
-        s += 1;
-    }
-
-    if (base == 16 && cy_str_has_prefix(s, "0x")) {
-        s += 2;
-    }
-
-    for (;;) {
-        i64 d;
-        if (cy_char_is_digit(*s)) {
-            d = *s - '0';
-        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
-            d = cy_hex_digit_to_i64(*s);
-        } else {
-            break;
-        }
-
-        res = res * base + d;
-        s += 1;
-    }
-
-    if (negative) {
-        res = -res;
-    }
-
-    *value = res;
-    return s - str;
+    return str;
 }
 
 u64 cy_str_to_u64(const char *str, i32 base, isize *len_out)
@@ -1967,12 +2411,6 @@ i64 cy_str_to_i64(const char *str, i32 base, isize *len_out)
     return res;
 }
 
-static const char cy__num_to_char_table[] =
-    "0123456789"
-    "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
-    "abcdefghijklmnopqrstuvwxyz"
-    "@$";
-
 isize cy_str_parse_u64(u64 n, i32 base, char *dst)
 {
     char *c = dst;
@@ -1980,13 +2418,13 @@ isize cy_str_parse_u64(u64 n, i32 base, char *dst)
         *c++ = '0';
     } else {
         while (n > 0) {
-            *c++ = cy__num_to_char_table[n % base];
+            *c++ = cy__num_to_char_table_upper[n % base];
             n /= base;
         }
     }
 
     *c = '\0';
-    cy_str_rev(dst);
+    cy_str_reverse(dst);
 
     return c - dst;
 }
@@ -2005,7 +2443,7 @@ isize cy_str_parse_i64(i64 n, i32 base, char *dst)
         *c++ = '0';
     } else {
         while (v > 0) {
-            *c++ = cy__num_to_char_table[v % base];
+            *c++ = cy__num_to_char_table_upper[v % base];
             v /= base;
         }
     }
@@ -2015,7 +2453,7 @@ isize cy_str_parse_i64(i64 n, i32 base, char *dst)
     }
 
     *c = '\0';
-    cy_str_rev(dst);
+    cy_str_reverse(dst);
 
     return c - dst;
 }
@@ -2095,31 +2533,11 @@ isize cy_str_parse_f32(f32 n, char *dst)
     return (f32)cy_str_parse_f64(n, dst);
 }
 
-// TODO(cya): figure this out
-#define CY__NAN (0.0 / 0.0)
-#define CY__INF __builtin_inff64()
-
-#define CY_IS_NAN(n) (n == CY__NAN)
-#define CY_IS_INF(n) (n == +CY__INF || n == -CY__INF)
-
 typedef struct {
     u32 integral;
     u32 decimal;
     i16 exponent;
-} CyFloatParts;
-
-#define CY__BIN_EXP_POS(val, exp, b) { \
-    if (val >= 1e##b) { \
-        val /= 1e##b; \
-        exp += b; \
-    } \
-} (void)0
-#define CY__BIN_EXP_NEG(val, exp, b, b1) { \
-    if (val < 1e-##b1) { \
-        val *= 1e##b; \
-        exp -= b; \
-    } \
-} (void)0
+} CyPrivFloatParts;
 
 cy_internal inline i16 cy__normalize_f64(f64 *val)
 {
@@ -2152,34 +2570,34 @@ cy_internal inline i16 cy__normalize_f64(f64 *val)
     return exp;
 }
 
-cy_internal inline CyFloatParts cy__split_f64(f64 val)
+cy_internal inline CyPrivFloatParts cy__f64_split(f64 val)
 {
     i16 exponent = cy__normalize_f64(&val);
     u32 integral = (u32)val;
     f64 remainder = (val - (f64)integral) * 1e9;
-
     u32 decimal = (u32)remainder;
+
     remainder -= decimal;
     if (remainder > 0.5) {
         decimal += 1;
-        if (decimal >= 1e9) {
+        if (decimal > 1e9) {
             decimal = 0;
             integral += 1;
-            if (exponent != 0 && integral >= 10) {
-                exponent += 1;
+            if (exponent != 0 && integral > 9) {
                 integral = 1;
+                exponent += 1;
             }
         }
     }
 
-    return (CyFloatParts){
+    return (CyPrivFloatParts){
         .integral = integral,
         .decimal = decimal,
         .exponent = exponent,
     };
 }
 
-cy_internal inline isize cy__str_parse_decimal(u32 value, char *dst)
+cy_internal inline isize cy__f64_parse_decimal(u32 value, char *dst)
 {
     isize width = 9;
     while (value % 10 == 0 && width > 0) {
@@ -2189,12 +2607,12 @@ cy_internal inline isize cy__str_parse_decimal(u32 value, char *dst)
 
     char *c = dst;
     while (width-- > 0) {
-        *c++ = cy__num_to_char_table[value % 10];
+        *c++ = cy__num_to_char_table_upper[value % 10];
         value /= 10;
     }
 
     *c = '\0';
-    cy_str_rev(dst);
+    cy_str_reverse(dst);
 
     return c - dst;
 }
@@ -2219,11 +2637,11 @@ isize cy_str_parse_f64(f64 n, char *dst)
         return cy_str_copy(cur, "Inf") - dst;
     }
 
-    CyFloatParts parts = cy__split_f64(n);
+    CyPrivFloatParts parts = cy__f64_split(n);
     cur += cy_str_parse_u64(parts.integral, 10, cur);
     if (parts.decimal > 0) {
         *cur++ = '.';
-        cur += cy__str_parse_decimal(parts.decimal, cur);
+        cur += cy__f64_parse_decimal(parts.decimal, cur);
     }
 
     if (parts.exponent != 0) {
