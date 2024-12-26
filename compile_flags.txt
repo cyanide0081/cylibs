@@ -1,0 +1,5 @@
+-DCY_IMPLEMENTATION
+-std=c99
+-Wall
+-Wextra
+-pedantic
