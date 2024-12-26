@@ -509,6 +509,8 @@ CY_DEF b32 cy_char_is_hex_digit(char c);
 CY_DEF b32 cy_char_is_lower(char c);
 CY_DEF b32 cy_char_is_upper(char c);
 
+CY_DEF b32 cy_char_is_in_set(char c, const char *cut_set);
+
 CY_DEF char cy_char_to_lower(char c);
 CY_DEF char cy_char_to_upper(char c);
 
@@ -898,7 +900,8 @@ enum {
     CY__FMT_LEN_PTRDIFF = CY_BIT(11),
     CY__FMT_LEN_LONG_DOUBLE = CY_BIT(12),
 
-    CY__FMT_LEN_MODS = CY__FMT_LEN_CHAR | CY__FMT_LEN_SHORT | CY__FMT_LEN_LONG |
+    CY__FMT_LEN_MODS =
+        CY__FMT_LEN_CHAR | CY__FMT_LEN_SHORT | CY__FMT_LEN_LONG |
         CY__FMT_LEN_LONG_LONG | CY__FMT_LEN_INTMAX | CY__FMT_LEN_SIZE |
         CY__FMT_LEN_PTRDIFF | CY__FMT_LEN_LONG_DOUBLE,
 
@@ -921,6 +924,75 @@ typedef struct {
     i32 width;
     i32 precision;
 } CyFmtInfo;
+
+cy_internal isize cy__scan_u64(const char *str, i32 base, u64 *value)
+{
+    const char *s = str;
+    u64 res = 0;
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        char c = *s;
+        if (cy_char_is_digit(c)) {
+            d = c - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(c)) {
+            d = cy_hex_digit_to_i64(c);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    if (value != NULL) {
+        *value = res;
+    }
+
+    return s - str;
+}
+
+cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
+{
+    const char *s = str;
+    i64 res = 0;
+    b32 negative = false;
+    if (*s == '-') {
+        negative = true;
+        s += 1;
+    }
+
+    if (base == 16 && cy_str_has_prefix(s, "0x")) {
+        s += 2;
+    }
+
+    for (;;) {
+        i64 d;
+        if (cy_char_is_digit(*s)) {
+            d = *s - '0';
+        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
+            d = cy_hex_digit_to_i64(*s);
+        } else {
+            break;
+        }
+
+        res = res * base + d;
+        s += 1;
+    }
+
+    if (negative) {
+        res = -res;
+    }
+
+    if (value != NULL) {
+        *value = res;
+    }
+
+    return s - str;
+}
 
 static const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
 static const char cy__num_to_char_table_lower[] = "0123456789abcdef";
@@ -1218,83 +1290,23 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     return cur - dst;
 }
 
-cy_internal isize cy__scan_u64(const char *str, i32 base, u64 *value)
-{
-    const char *s = str;
-    u64 res = 0;
-    if (base == 16 && cy_str_has_prefix(s, "0x")) {
-        s += 2;
-    }
-
-    for (;;) {
-        i64 d;
-        char c = *s;
-        if (cy_char_is_digit(c)) {
-            d = c - '0';
-        } else if (base == 16 && cy_char_is_hex_digit(c)) {
-            d = cy_hex_digit_to_i64(c);
-        } else {
-            break;
-        }
-
-        res = res * base + d;
-        s += 1;
-    }
-
-    if (value != NULL) {
-        *value = res;
-    }
-
-    return s - str;
-}
-
-cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
-{
-    const char *s = str;
-    i64 res = 0;
-    b32 negative = false;
-    if (*s == '-') {
-        negative = true;
-        s += 1;
-    }
-
-    if (base == 16 && cy_str_has_prefix(s, "0x")) {
-        s += 2;
-    }
-
-    for (;;) {
-        i64 d;
-        if (cy_char_is_digit(*s)) {
-            d = *s - '0';
-        } else if (base == 16 && cy_char_is_hex_digit(*s)) {
-            d = cy_hex_digit_to_i64(*s);
-        } else {
-            break;
-        }
-
-        res = res * base + d;
-        s += 1;
-    }
-
-    if (negative) {
-        res = -res;
-    }
-
-    if (value != NULL) {
-        *value = res;
-    }
-
-    return s - str;
-}
-
-// TODO(cya): implement extended format specifiers
-// * %q for bools
-// * %b for binary int
-// * %cs for cystrings
-// * %cv for cystringviews
+// TODO(cya):
+// * make the function calculate how many bytes it *would* write into the array
+//   had it been large enough and just discard them before returning
+// * implement extended format specifiers
+//     * %q for bools
+//     * %b for binary int
+//     * %cs for cystrings
+//     * %cv for cystringviews
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
-    isize remaining = size;
+    isize remaining = size - 1;
+
+#if 0
+    b32 write = size > 0;
+    isize ret = 0;
+#endif
+
     char *end = buf;
     const char *f = fmt;
     for (;;) {
@@ -1573,12 +1585,23 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 break;
             }
 
+            b32 zero = info.flags & CY__FMT_ZERO;
+            // TODO(cya): handle all complex flag collisions with 0
+            char fill = zero ? '0' : ' ';
             if (info.flags & CY__FMT_MINUS) {
-                cy_mem_set(end, ' ', extra);
+                cy_mem_set(end, fill, extra);
             } else {
                 cy_mem_move(cur + extra, cur, len);
-                cy_mem_set(cur, ' ', extra);
+                cy_mem_set(cur, fill, extra);
             }
+
+            // TODO(cya): continue
+#if 0
+            char *first = 0;
+            if (zero && cy_char_is_in_set(*first, "+-")) {
+
+            }
+#endif
 
             end += extra, remaining -= extra;
         }
@@ -2425,6 +2448,17 @@ inline b32 cy_char_is_lower(char c)
 inline b32 cy_char_is_upper(char c)
 {
     return c - 0x41 < 26;
+}
+
+inline b32 cy_char_is_in_set(char c, const char *cut_set)
+{
+    while (*cut_set != '\0') {
+        if (c == *cut_set++) {
+            return true;
+        }
+    }
+
+    return false;
 }
 
 inline char cy_char_to_lower(char c) {
