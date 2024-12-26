@@ -210,6 +210,7 @@ typedef i32 Rune; // Unicode codepoint
     b = __tmp; \
 } CY_NOOP()
 
+#define CY_ABS(n) (n < 0 ? -(n) : n)
 #define CY_IS_IN_RANGE_INCL(n, lo, hi) (n >= lo && n <= hi)
 #define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n > lo && n < hi)
 
@@ -995,17 +996,19 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
 
     isize len = c - dst;
     cy_str_reverse_n(dst, len);
+
     return len;
 }
 
 cy_internal isize cy__print_str(
     char *dst, isize cap, CyFmtInfo *info, const char *src
 ) {
+    i32 precision = info->precision;
     char *start = dst;
-    if (info->precision > 0) {
-        while (*src && info->precision > 0 && cap > 0) {
+    if (precision > 0) {
+        while (*src && precision > 0 && cap > 0) {
             *dst++ = *src++;
-            cap -= 1, info->precision -= 1;
+            cap -= 1, precision -= 1;
         }
     } else {
         while (*src && cap > 0) {
@@ -1018,35 +1021,53 @@ cy_internal isize cy__print_str(
 }
 
 // NOTE(cya): binary exponentiation for floats
-#define CY__BIN_EXP_POS(val, exp, b) { \
-    if (val >= 1e##b) { \
-        val /= 1e##b; \
+#define CY__CALC_BIN_EXPS(_kind, base, prefix, val, exp) \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 256); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 128); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 64); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 32); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 16); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 8); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 4); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 2); \
+    CY__BIN_EXP_##_kind(base, prefix, val, exp, 1); \
+
+#define CY__BIN_EXP_INC(base, prefix, val, exp, b) { \
+    if (val >= prefix##b) { \
+        val /= prefix##b; \
         exp += b; \
     } \
 } CY_NOOP()
-#define CY__BIN_EXP_NEG(val, exp, b, b1) { \
-    if (val < 1e-##b1) { \
-        val *= 1e##b; \
+#define CY__BIN_EXP_DEC(base, prefix, val, exp, b) { \
+    if (val < (prefix##-##b * base)) { \
+        val *= prefix##b; \
         exp -= b; \
     } \
 } CY_NOOP()
 
-static u64 cy__power_of_ten_table[] = {
+static f64 cy__pow_of_10_table[] = {
     1e0, 1e1, 1e2, 1e3, 1e4,
     1e5, 1e6, 1e7, 1e8, 1e9,
     1e10, 1e11, 1e12, 1e13, 1e14,
     1e15, 1e16
 };
 
+static f64 cy__pow_of_16_table[] = {
+    0x1p0, 0x1p4, 0x1p8, 0x1p12, 0x1p16,
+    0x1p20, 0x1p24, 0x1p28, 0x1p32, 0x1p36,
+    0x1p40, 0x1p44, 0x1p48, 0x1p52, 0x1p56,
+    0x1p60, 0x1p64,
+};
+
 cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 {
     CY_ASSERT(cap > 0);
 
+    b32 upper = info->flags & CY__FMT_STYLE_UPPER;
     isize remaining = cap;
     char *cur = dst;
     if (CY_IS_NAN(n)) {
-        const char *s = info->flags & CY__FMT_STYLE_UPPER ? "NAN" : "nan";
-        return cy__print_str(cur, cap, info, s);
+        return cy__print_str(cur, cap, info, upper ? "NAN" : "nan");
     }
 
     if (n < 0.0) {
@@ -1056,49 +1077,74 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     }
 
     if (CY_IS_INF(n)) {
-        const char *s = info->flags & CY__FMT_STYLE_UPPER ? "INF" : "inf";
-        return cy__print_str(cur, cap, info, s);
+        return cy__print_str(cur, cap, info, upper ? "INF" : "inf");
     }
 
+    b32 style_hex = info->base == 16;
     b32 style_exp = info->flags & CY__FMT_STYLE_EXP;
     b32 style_auto = info->flags & CY__FMT_STYLE_AUTO;
+
+    if (style_hex) {
+        cur += cy__print_str(cur, cap, info, upper ? "0X" : "0x") ;
+    }
 
     i32 precision = info->precision;
     i16 exponent = 0;
     f64 normalized = n;
     if (style_exp || style_auto) {
-        // TODO(cya): test this out
-        if (n >= 1e1) {
-            CY__BIN_EXP_POS(normalized, exponent, 256);
-            CY__BIN_EXP_POS(normalized, exponent, 128);
-            CY__BIN_EXP_POS(normalized, exponent, 64);
-            CY__BIN_EXP_POS(normalized, exponent, 32);
-            CY__BIN_EXP_POS(normalized, exponent, 8);
-            CY__BIN_EXP_POS(normalized, exponent, 4);
-            CY__BIN_EXP_POS(normalized, exponent, 2);
-            CY__BIN_EXP_POS(normalized, exponent, 1);
-        } else if (n > 0.0 && n <= 1e-1) {
-            CY__BIN_EXP_NEG(normalized, exponent, 256, 255);
-            CY__BIN_EXP_NEG(normalized, exponent, 128, 127);
-            CY__BIN_EXP_NEG(normalized, exponent, 64, 63);
-            CY__BIN_EXP_NEG(normalized, exponent, 32, 31);
-            CY__BIN_EXP_NEG(normalized, exponent, 8, 7);
-            CY__BIN_EXP_NEG(normalized, exponent, 4, 3);
-            CY__BIN_EXP_NEG(normalized, exponent, 2, 1);
-            CY__BIN_EXP_NEG(normalized, exponent, 1, 0);
+        if (normalized >= 1e1) {
+            CY__CALC_BIN_EXPS(INC, 10, 1e, normalized, exponent);
+        } else if (normalized > 0.0 && normalized <= 1e0) {
+            CY__CALC_BIN_EXPS(DEC, 10, 1e, normalized, exponent);
+            if (normalized < 1e0) {
+                normalized *= 1e1;
+                exponent -= 1;
+            }
+        }
+    } else if (style_hex) {
+        if (normalized >= 0x1p1) {
+            CY__CALC_BIN_EXPS(INC, 2, 0x1p, normalized, exponent);
+        } else if (normalized > 0.0 && normalized <= 0x1p0) {
+            CY__CALC_BIN_EXPS(DEC, 2, 0x1p, normalized, exponent);
+            if (normalized < 0x1p0) {
+                normalized *= 0x1p1;
+                exponent -= 1;
+            }
         }
     }
 
-    b32 swap = style_exp ||
+    b32 swap = style_hex || style_exp ||
         (style_auto && (exponent < -4 || exponent >= precision));
     if (swap) {
         n = normalized;
     }
 
     u64 integral = (u64)n;
-    f64 remainder = (n - (f64)integral) * cy__power_of_ten_table[precision];
-    u64 decimal = (u64)remainder;
+    isize integral_len, len;
+    len = integral_len = cy__print_u64(cur, remaining, &(CyFmtInfo){
+        .base = info->base,
+    }, integral);
+    cur += len, remaining -= len;
 
+    // NOTE(cya): because 'significant digits' includes integral part
+    if (style_auto) {
+        precision -= integral_len;
+    }
+
+    f64 remainder = (n - (f64)integral);
+    if (style_hex && precision == -1) {
+        precision = 0;
+        while (remainder - (f64)(u64)remainder != 0.0) {
+            remainder *= (f64)info->base;
+            precision += 1;
+        }
+    } else {
+        const f64 *table = info->base == 16 ?
+            cy__pow_of_16_table : cy__pow_of_10_table;
+        remainder *= table[precision];
+    }
+
+    u64 decimal = (u64)remainder;
     remainder -= decimal;
     if (remainder > 0.5) {
         decimal += 1;
@@ -1112,24 +1158,28 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         }
     }
 
-    isize len = cy__print_u64(cur, remaining, info, integral);
-    cur += len, remaining -= len;
+    b32 print_decimal = precision > 0 && remaining > 2;
+    if (style_auto && decimal == 0) {
+        print_decimal = false;
+    }
 
-    if (precision > 0 && decimal > 0 && remaining > 1) {
+    if (print_decimal) {
         *cur++ = '.';
         remaining -= 1;
 
-        if (info->flags & CY__FMT_STYLE_AUTO) {
-            while (decimal % 10 == 0 && precision > 0) {
-                decimal /= 10;
+        if (style_auto) {
+            while (decimal % info->base == 0) {
+                decimal /= info->base;
                 precision -= 1;
             }
         }
 
+        const char *table = upper ?
+            cy__num_to_char_table_upper : cy__num_to_char_table_lower;
         char *c = cur;
         while (precision-- > 0) {
-            *c++ = cy__num_to_char_table_upper[decimal % 10];
-            decimal /= 10;
+            *c++ = table[decimal % info->base];
+            decimal /= info->base;
         }
 
         len = c - cur;
@@ -1138,12 +1188,30 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         cur += len, remaining -= len;
     }
 
-    if (exponent != 0 && remaining > 1) {
-        *cur++ = 'e';
+    b32 print_exponent = swap &&
+        (style_exp || style_hex || (exponent != 0 && remaining > 1));
+    if (print_exponent) {
+        char c = 'e';
+        if (style_hex) {
+            c = (upper ? 'P' : 'p');
+        } else if (upper) {
+            c = 'E';
+        }
+
+        *cur++ = c;
         remaining -= 1;
 
-        info->flags |= CY__FMT_PLUS;
-        len = cy__print_i64(cur, remaining, info, exponent);
+        c = (exponent < 0) ? '-' : '+';
+        *cur++ = c;
+        remaining -= 1;
+
+        exponent = CY_ABS(exponent);
+        if (!style_hex && exponent < 10) {
+            *cur++ = '0';
+            remaining -= 1;
+        }
+
+        len = cy__print_i64(cur, remaining, &(CyFmtInfo){.base = 10}, exponent);
         cur += len, remaining -= len;
     }
 
@@ -1485,8 +1553,13 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     len = cy__print_i64(end, remaining, &info, val);
                 }
             } else if (info.flags & CY__FMT_FLOAT) {
-                info.precision = (info.precision == -1) ?
-                    6 : CY_MIN(info.precision, 16);
+                if (info.precision == -1) {
+                    if (info.base != 16) {
+                        info.precision = 6;
+                    }
+                } else {
+                    info.precision = CY_MIN(info.precision, 16);
+                }
 
                 f64 val = va_arg(va, f64);
                 len = cy__print_f64(end, remaining, &info, val);
@@ -2645,7 +2718,7 @@ typedef struct {
     i16 exponent;
 } CyPrivFloatParts;
 
-cy_internal inline i16 cy__f64_normalize(f64 *val)
+cy_internal inline i16 cy__f64_normalize_decimal(f64 *val)
 {
     const f64 exp_threshold_neg = 1e-5;
     const f64 exp_threshold_pos = 1e7;
@@ -2653,23 +2726,9 @@ cy_internal inline i16 cy__f64_normalize(f64 *val)
     i16 exp = 0;
     f64 value = *val;
     if (value > exp_threshold_pos) {
-        CY__BIN_EXP_POS(value, exp, 256);
-        CY__BIN_EXP_POS(value, exp, 128);
-        CY__BIN_EXP_POS(value, exp, 64);
-        CY__BIN_EXP_POS(value, exp, 32);
-        CY__BIN_EXP_POS(value, exp, 8);
-        CY__BIN_EXP_POS(value, exp, 4);
-        CY__BIN_EXP_POS(value, exp, 2);
-        CY__BIN_EXP_POS(value, exp, 1);
+        CY__CALC_BIN_EXPS(INC, 10, 1e, value, exp);
     } else if (value > 0.0 && value <= exp_threshold_neg) {
-        CY__BIN_EXP_NEG(value, exp, 256, 255);
-        CY__BIN_EXP_NEG(value, exp, 128, 127);
-        CY__BIN_EXP_NEG(value, exp, 64, 63);
-        CY__BIN_EXP_NEG(value, exp, 32, 31);
-        CY__BIN_EXP_NEG(value, exp, 8, 7);
-        CY__BIN_EXP_NEG(value, exp, 4, 3);
-        CY__BIN_EXP_NEG(value, exp, 2, 1);
-        CY__BIN_EXP_NEG(value, exp, 1, 0);
+        CY__CALC_BIN_EXPS(DEC, 10, 1e, value, exp);
     }
 
     *val = value;
@@ -2678,7 +2737,7 @@ cy_internal inline i16 cy__f64_normalize(f64 *val)
 
 cy_internal inline CyPrivFloatParts cy__f64_split(f64 val)
 {
-    i16 exponent = cy__f64_normalize(&val);
+    i16 exponent = cy__f64_normalize_decimal(&val);
     u32 integral = (u32)val;
     f64 remainder = (val - (f64)integral) * 1e9;
     u32 decimal = (u32)remainder;
