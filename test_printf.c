@@ -1,20 +1,33 @@
 #define CY_IMPLEMENTATION
 #include "cy.h"
 
-int main(int argc, char *argv[])
+int main(void)
 {
-    const char *str = "hello!";
     char buf[1024];
     isize buf_size = CY_ARRAY_LEN(buf);
     int written = -1;
     f64 f = 766.3e8;
+
+    const char *str = "hello :)";
+    cy_str_copy(buf, str);
+    printf("str:              `%s`\n", buf);
+    printf("cy_str_copy(str): `%s`\n", buf);
+    
+    cy_sprintf(buf, buf_size, "ext int:             % 026i", 12345);
+    printf("%s\n", buf);
+    printf("ext int(libc):       % 026i\n", 12345);
+        
+    cy_sprintf(buf, buf_size, "ext float:           %+026e", f);
+    printf("%s\n", buf);
+    printf("ext float(libc):     %+026e\n", f);
+    
     isize ret = cy_sprintf(
         buf, buf_size,
         "i am a text buffer (not emacs!!)\n"
         "string:        %26.*s\n"
         "char:          %26c\n"
-        "unsigned long: %+26.5lo\n"
-        "exp float:     %0+26e\n"
+        "unsigned long: %26.5lo\n"
+        "exp float:     %+26e\n"
         "hex float:     %26a\n"
         "%n",
         4, str, 'W', 07131UL, f, f,
@@ -72,7 +85,7 @@ int main(int argc, char *argv[])
     );
 
     printf("\n");
-    printf("printf(glibc):\n");
+    printf("printf(libc):\n");
 
     start = cy_ticks_query();
 

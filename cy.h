@@ -136,7 +136,7 @@ CY_STATIC_ASSERT(sizeof(intptr) == sizeof(uintptr));
 
 typedef i8 b8;
 typedef i16 b16;
-typedef i32 b32;
+typedef i32 b32; // NOTE(cya): should be faster to address these
 
 #ifndef true
     #define true (0 == 0)
@@ -199,7 +199,6 @@ typedef i32 Rune; // Unicode codepoint
 #define cy_persist static
 
 /* ================================= Runtime ================================ */
-#include <stdio.h>   // for optional logging
 #include <stdarg.h>  // va_args
 
 #define CY_BIT(n) (1 << (n))
@@ -212,13 +211,24 @@ typedef i32 Rune; // Unicode codepoint
 
 #define CY_ABS(n) (n < 0 ? -(n) : n)
 #define CY_IS_IN_RANGE_INCL(n, lo, hi) (n >= lo && n <= hi)
-#define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n > lo && n < hi)
+#define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n >= lo && n < hi)
+#define CY_IS_IN_BETWEEN(n, lo, hi) (n > lo && n < hi)
 
-// TODO(cya): figure out how to check for availability of these builtins
-#define CY__INF __builtin_inff64()
+#if defined(__builtin_inff64)
+    #define CY__INF __builtin_inff64()
+#else
+    #define CY__INF (1.0 / 0.0)
+#endif
 
-#define CY_IS_NAN(n) (__builtin_isnan(n))
 #define CY_IS_INF(n) (n == +CY__INF || n == -CY__INF)
+
+#if defined(__builtin_isnan)
+    #define CY__IS_NAN(n) __builtin_is_nan(n)
+#else
+    #define CY__IS_NAN(n) (n != n)
+#endif
+
+#define CY_IS_NAN(n) CY__IS_NAN(n)
 
 CY_DEF void cy_handle_assertion(
     const char *prefix, const char *cond, const char *file,
@@ -237,7 +247,7 @@ CY_DEF void *cy_mem_set(void *dst, u8 val, isize bytes);
 CY_DEF void *cy_mem_zero(void *dst, isize bytes);
 CY_DEF isize cy_mem_compare(const void *a, const void *b, isize bytes);
 
-CY_DEF b8 cy_is_power_of_two(isize n);
+CY_DEF b32 cy_is_power_of_two(isize n);
 
 CY_DEF isize cy_align_forward(isize size, isize align);
 CY_DEF void *cy_align_ptr_forward(void *ptr, isize align);
@@ -272,26 +282,37 @@ typedef enum {
     CY_FILE_STD_ERR,
 } CyFileStdType;
 
+#if 0
 CY_DEF CyFile *cy_file_get_std(CyFileStdType type)
 {
     // TODO(cya): implement
     return NULL;
 }
+#endif
 
 /* =================================== I/O ================================== */
 #define CY_IO_INTERNAL_BUF_SIZE 4096
 
+#if defined(__clang__) || defined(__GNUC__)
+    #define CY__PRINTF_ATTR(fmt) \
+        __attribute__((format(printf, fmt, (fmt) + 1)))
+#else
+    #define CY__PRINTF_ATTR(fmt)
+#endif
+
 // TODO(cya): add gcc/clang type warning builtins
-CY_DEF isize cy_printf(const char *fmt, ...);
-CY_DEF isize cy_printf_err(const char *fmt, ...);
+CY_DEF isize cy_printf(const char *fmt, ...) CY__PRINTF_ATTR(1);
+CY_DEF isize cy_printf_err(const char *fmt, ...) CY__PRINTF_ATTR(1);
 
 CY_DEF isize cy_printf_va(const char *fmt, va_list va);
 CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
 
-CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...);
+CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__PRINTF_ATTR(2);
 CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
 
-CY_DEF isize cy_sprintf(char *buf, isize size, const char *fmt, ...);
+CY_DEF isize cy_sprintf(
+    char *buf, isize size, const char *fmt, ...
+) CY__PRINTF_ATTR(3);
 CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
 
 /* =============================== Allocators =============================== */
@@ -363,9 +384,14 @@ CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
 #define CY_MIN(a, b) (a < b ? a : b)
 #define CY_MAX(a, b) (a > b ? a : b)
 
+// NOTE(cya): works with power-of-two alignments
+#define CY__IS_ALIGNED(p, a) (((uintptr)(p) & (uintptr)((a) - 1)) == 0)
+#define CY__IS_WORD_ALIGNED(p) CY__IS_ALIGNED(p, sizeof(usize)) 
+
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
-// NOTE(cya): only works on "array strings" (e.g.: char str[]), not on pointers
+
+// NOTE(cya): only works on arrays and literals (not on pointers)
 #define CY_STR_LIT_LEN(str) (isize)((sizeof(str) - 1) / sizeof(*(str)))
 #define CY_ARRAY_LEN(arr) (isize)((sizeof(arr)) / sizeof(*(arr)))
 
@@ -486,18 +512,18 @@ CY_DEF CyPool cy_pool_init(
     void *backing_buf, isize size, isize chunk_size, isize chunk_align
 );
 
-/* TODO(cya):
- * add new behaviors to arena/stack allocators:
- *     (page expansion, static backing buffers and scratch memory (ring bufs))
- * virtual memory allocator (includes commit and reserve helper functions)
- * bump allocator
- * bitmap allocator
- * pool allocator
- * free-list allocator
- * buddy allocator
- * extra allocator strategies from: https://www.youtube.com/watch?v=LIb3L4vKZ7U
- * general-purpose heap allocator composed of the basic ones to replace malloc
- */
+// TODO(cya):
+// * add new behaviors to arena/stack allocators:
+//   (page expansion, static backing buffers and scratch memory (ring bufs))
+// * virtual memory allocator (includes commit and reserve helper functions)
+// * bump allocator
+// * bitmap allocator
+// * pool allocator
+// * free-list allocator
+// * buddy allocator
+// * extra allocator strategies from: https://www.youtube.com/watch?v=LIb3L4vKZ7U
+// * general-purpose heap allocator composed of the basic ones to replace malloc
+
 
 /* ============================== Char procs ================================ */
 CY_DEF const char *cy_char_first_occurence(const char *str, char c);
@@ -513,6 +539,7 @@ CY_DEF b32 cy_char_is_in_set(char c, const char *cut_set);
 
 CY_DEF char cy_char_to_lower(char c);
 CY_DEF char cy_char_to_upper(char c);
+CY_DEF char cy_char_with_case(char c, b32 uppercase);
 
 CY_DEF i64 cy_digit_to_i64(char digit);
 CY_DEF i64 cy_hex_digit_to_i64(char digit);
@@ -581,7 +608,9 @@ CY_DEF CyString cy_string_append_len(
 CY_DEF CyString cy_string_append(CyString str, const CyString other);
 CY_DEF CyString cy_string_append_c(CyString str, const char *other);
 CY_DEF CyString cy_string_append_rune(CyString str, Rune r);
-CY_DEF CyString cy_string_append_fmt(CyString str, const char *fmt, ...);
+CY_DEF CyString cy_string_append_fmt(
+    CyString str, const char *fmt, ...
+) CY__PRINTF_ATTR(2);
 CY_DEF CyString cy_string_append_view(CyString str, CyStringView view);
 CY_DEF CyString cy_string_prepend_len(
     CyString str, const char *other, isize len
@@ -589,7 +618,9 @@ CY_DEF CyString cy_string_prepend_len(
 CY_DEF CyString cy_string_prepend(CyString str, const CyString other);
 CY_DEF CyString cy_string_prepend_c(CyString str, const char *other);
 CY_DEF CyString cy_string_prepend_rune(CyString str, Rune r);
-CY_DEF CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...);
+CY_DEF CyString cy_string_prepend_fmt(
+    CyString str, const char *fmt, ...
+) CY__PRINTF_ATTR(2);
 CY_DEF CyString cy_string_prepend_view(CyString str, CyStringView view);
 CY_DEF CyString cy_string_pred_right(CyString str, isize width, Rune r);
 CY_DEF CyString cy_string_set(CyString str, const char *c_str);
@@ -597,8 +628,8 @@ CY_DEF CyString cy_string_dup(CyAllocator a, const CyString src);
 CY_DEF b32 cy_string_are_equal(const CyString a, const CyString b);
 
 typedef enum {
-    CY__STRING_TRIM_LEADING = 0x01,
-    CY__STRING_TRIM_TRAILING = 0x02,
+    CY__STRING_TRIM_LEADING = CY_BIT(0),
+    CY__STRING_TRIM_TRAILING = CY_BIT(1),
 } CyStringTrimFlags;
 
 CY_DEF CyString cy_string_trim(CyString str, const char *char_set);
@@ -688,6 +719,13 @@ CY_DEF isize cy_utf8_codepoints(const char *str);
  ******************************************************************************/
 #ifdef CY_IMPLEMENTATION
 /* ================================= Runtime ================================ */
+
+#include <stdio.h>
+
+#define cy_printf printf
+#define cy_printf_err(...) fprintf(stderr, __VA_ARGS__) 
+#define cy_printf_err_va(...) vfprintf(stderr, __VA_ARGS__) 
+
 void cy_handle_assertion(
     const char *prefix,
     const char *cond,
@@ -736,7 +774,7 @@ inline isize cy_mem_compare(const void *a, const void *b, isize bytes)
     return memcmp(a, b, (usize)bytes);
 }
 
-inline b8 cy_is_power_of_two(isize n)
+inline b32 cy_is_power_of_two(isize n)
 {
     return (n & (n - 1)) == 0;
 }
@@ -809,7 +847,7 @@ inline CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end)
 inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
 {
 #if defined(CY_OS_WINDOWS)
-    static LARGE_INTEGER perf_freq;
+    cy_persist LARGE_INTEGER perf_freq;
     if (perf_freq.QuadPart == 0) {
         QueryPerformanceFrequency(&perf_freq);
     }
@@ -822,6 +860,7 @@ inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
 }
 
 /* =================================== I/O ================================== */
+#if 0
 inline isize cy_printf(const char *fmt, ...)
 {
     va_list va;
@@ -864,13 +903,14 @@ inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
 
 inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
-    static char buf[CY_IO_INTERNAL_BUF_SIZE];
+    cy_persist char buf[CY_IO_INTERNAL_BUF_SIZE];
     isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
 
     // TODO(cya): write to file
 
     return len;
 }
+#endif
 
 inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
 {
@@ -994,38 +1034,63 @@ cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
     return s - str;
 }
 
-static const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
-static const char cy__num_to_char_table_lower[] = "0123456789abcdef";
+cy_global const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
+cy_global const char cy__num_to_char_table_lower[] = "0123456789abcdef";
 
 cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 {
     const char *table = info->flags & CY__FMT_STYLE_UPPER ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
     i32 base = info->base;
+    
+    isize remaining = cap;
     char *c = dst;
     if (n == 0) {
         *c++ = '0';
+        remaining -= 1;
     } else {
-        while (n > 0 && cap-- > 0) {
+        while (n > 0 && remaining-- > 0) {
             *c++ = table[n % base];
             n /= base;
         }
     }
 
-    if (info->flags & CY__FMT_INTS) {
+    b32 use_precision = (info->precision != -1) &&
+        (info->flags & CY__FMT_INTS);
+    if (use_precision) {
         isize cur_len = c - dst;
-        while (cur_len < info->precision && cap > 0) {
+        while (cur_len < info->precision && remaining > 0) {
             *c++ = '0';
-            cur_len += 1, cap -= 1;
+            cur_len += 1, remaining -= 1;
         }
     }
 
-    if (info->flags & CY__FMT_PLUS) {
-        *c++ = '+';
-        cap -= 1;
+    isize len = c - dst;
+    b32 fill_with_zeros = !use_precision && (len < info->width) &&
+        (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
+    b32 print_sign = (info->flags & CY__FMT_PLUS) ||
+        (info->flags & CY__FMT_SPACE);
+    isize sign_len = !!print_sign;
+    if (fill_with_zeros && remaining > 0) {    
+        isize extra = info->width - len - sign_len;
+        while (extra-- > 0 && remaining > 0) {
+            *c++ = '0';
+            len += 1, remaining -= 1;
+        }
     }
 
-    isize len = c - dst;
+    if (print_sign && remaining > 0) {
+        char sign = '-';
+        if (info->flags & CY__FMT_PLUS) {
+            sign = '+';
+        } else if (info->flags & CY__FMT_SPACE) {
+            sign = ' ';
+        }
+        
+        *c++ = sign;
+        len += 1, remaining -= 1;
+    }
+
     cy_str_reverse_n(dst, len);
     return len;
 }
@@ -1041,34 +1106,56 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         n = -n;
     }
 
+    isize remaining = cap;
     char *c = dst;
     u64 v = (u64)n;
     if (v == 0) {
         *c++ = '0';
+        remaining -= 1;
     } else {
-        while (v > 0 && cap-- > 0) {
+        while (v > 0 && remaining-- > 0) {
             *c++ = table[v % base];
             v /= base;
         }
     }
 
-    if (info->flags & CY__FMT_INTS) {
+    b32 use_precision = (info->precision != -1) &&
+        (info->flags & CY__FMT_INTS);
+    if (use_precision) {
         isize cur_len = c - dst;
-        while (cur_len < info->precision && cap > 0) {
+        while (cur_len < info->precision && remaining > 0) {
             *c++ = '0';
-            cur_len += 1, cap -= 1;
+            cur_len += 1, remaining -= 1;
         }
     }
 
-    if (negative && cap > 0) {
-        *c++ = '-';
-    } else if (info->flags & CY__FMT_PLUS) {
-        *c++ = '+';
+    isize len = c - dst;
+    b32 fill_with_zeros = !use_precision && (len < info->width) &&
+        (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
+    b32 print_sign = negative ||
+        (info->flags & CY__FMT_PLUS) || (info->flags & CY__FMT_SPACE);
+    isize sign_len = !!print_sign;
+    if (fill_with_zeros && remaining > 0) {    
+        isize extra = info->width - len - sign_len;
+        while (extra-- > 0 && remaining > 0) {
+            *c++ = '0';
+            len += 1, remaining -= 1;
+        }
     }
 
-    isize len = c - dst;
-    cy_str_reverse_n(dst, len);
+    if (print_sign && remaining > 0) {
+        char sign = '-';
+        if (info->flags & CY__FMT_PLUS) {
+            sign = '+';
+        } else if (info->flags & CY__FMT_SPACE) {
+            sign = ' ';
+        }
+        
+        *c++ = sign;
+        len += 1, remaining -= 1;
+    }
 
+    cy_str_reverse_n(dst, len);
     return len;
 }
 
@@ -1117,18 +1204,18 @@ cy_internal isize cy__print_str(
     } \
 } CY_NOOP()
 
-static f64 cy__pow_of_10_table[] = {
-    1e0, 1e1, 1e2, 1e3, 1e4,
-    1e5, 1e6, 1e7, 1e8, 1e9,
+cy_global f64 cy__pow_of_10_table[] = {
+    1e00, 1e01, 1e02, 1e03, 1e04,
+    1e05, 1e06, 1e07, 1e08, 1e09,
     1e10, 1e11, 1e12, 1e13, 1e14,
-    1e15, 1e16
+    1e15, 1e16, 1e16, 1e16, 1e16,
 };
 
-static f64 cy__pow_of_16_table[] = {
-    0x1p0, 0x1p4, 0x1p8, 0x1p12, 0x1p16,
+cy_global f64 cy__pow_of_16_table[] = {
+    0x1p00, 0x1p04, 0x1p08, 0x1p12, 0x1p16,
     0x1p20, 0x1p24, 0x1p28, 0x1p32, 0x1p36,
     0x1p40, 0x1p44, 0x1p48, 0x1p52, 0x1p56,
-    0x1p60, 0x1p64,
+    0x1p60, 0x1p60, 0x1p60, 0x1p60, 0x1p60,
 };
 
 cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
@@ -1146,6 +1233,12 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         *cur++ = '-';
         remaining -= 1;
         n = -n;
+    } else if (info->flags & CY__FMT_PLUS) {
+        *cur++ = '+';
+        remaining -= 1;
+    } else if (info->flags & CY__FMT_SPACE) {
+        *cur++ = ' ';
+        remaining -= 1;
     }
 
     if (CY_IS_INF(n)) {
@@ -1157,10 +1250,20 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 style_auto = info->flags & CY__FMT_STYLE_AUTO;
 
     if (style_hex) {
-        cur += cy__print_str(cur, cap, info, upper ? "0X" : "0x") ;
+        cur += cy__print_str(cur, cap, info, upper ? "0X" : "0x");
     }
 
+    char *num_start = cur;
+
+    const i32 MAX_PRECISION = 16;
     i32 precision = info->precision;
+    b32 custom_precision = (precision != -1);
+    if (custom_precision) {
+        precision = CY_MIN(precision, MAX_PRECISION);
+    } else if (!style_hex) {
+        precision = 6;
+    }
+    
     i16 exponent = 0;
     f64 normalized = n;
     if (style_exp || style_auto) {
@@ -1220,7 +1323,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     remainder -= decimal;
     if (remainder > 0.5) {
         decimal += 1;
-        if (decimal >= 1e9) {
+        if (decimal >= 1e16) {
             decimal = 0;
             integral += 1;
             if (exponent != 0 && integral >= 10) {
@@ -1239,7 +1342,14 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         *cur++ = '.';
         remaining -= 1;
 
-        if (style_auto) {
+        char *c = cur;
+        if (!style_auto) {
+            i32 extra_digits = info->precision - precision;
+            while (extra_digits > 0 && remaining > 0) {
+                *c++ = '0';
+                extra_digits -= 1, remaining -= 1;
+            }
+        } else {
             while (decimal % info->base == 0) {
                 decimal /= info->base;
                 precision -= 1;
@@ -1248,10 +1358,10 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 
         const char *table = upper ?
             cy__num_to_char_table_upper : cy__num_to_char_table_lower;
-        char *c = cur;
-        while (precision-- > 0) {
+        while (precision-- > 0 && remaining > 0) {
             *c++ = table[decimal % info->base];
             decimal /= info->base;
+            remaining -= 1;
         }
 
         len = c - cur;
@@ -1263,12 +1373,8 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 print_exponent = swap &&
         (style_exp || style_hex || (exponent != 0 && remaining > 1));
     if (print_exponent) {
-        char c = 'e';
-        if (style_hex) {
-            c = (upper ? 'P' : 'p');
-        } else if (upper) {
-            c = 'E';
-        }
+        char c = style_hex ? 'p' : 'e';
+        c = cy_char_with_case(c, upper);
 
         *cur++ = c;
         remaining -= 1;
@@ -1283,27 +1389,44 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
             remaining -= 1;
         }
 
-        len = cy__print_i64(cur, remaining, &(CyFmtInfo){.base = 10}, exponent);
+        len = cy__print_i64(cur, remaining, &(CyFmtInfo){
+            .base = 10,
+        }, exponent);
         cur += len, remaining -= len;
     }
 
-    return cur - dst;
+    len = cur - dst;
+    b32 fill_with_zeros = !custom_precision && (len < info->width) &&
+        (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
+    if (fill_with_zeros) {
+        isize prefix_len = num_start - dst;
+        isize extra = info->width - len;
+        if (remaining >= extra) {
+            cy_mem_move(num_start + extra, num_start, len - prefix_len);
+            cy_mem_set(num_start, '0', extra);
+            
+            remaining -= extra;
+        }
+
+        len += extra;
+    }
+
+    return len;
 }
 
 // TODO(cya):
 // * make the function calculate how many bytes it *would* write into the array
-//   had it been large enough and just discard them before returning
+//   had it been large enough and just discard them before returning the length
 // * implement extended format specifiers
 //     * %q for bools
 //     * %b for binary int
-//     * %cs for cystrings
 //     * %cv for cystringviews
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
     isize remaining = size - 1;
 
 #if 0
-    b32 write = size > 0;
+    b32 write = remaining > 0;
     isize ret = 0;
 #endif
 
@@ -1478,11 +1601,9 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         } break;
         case 'n': {
             int *out = va_arg(va, int*);
-            if (out == NULL) {
-                break;
+            if (out != NULL) {
+                *out = (int)(end - buf);
             }
-
-            *out = (int)(end - buf);
         } break;
         case '%': {
             *end = '%';
@@ -1494,15 +1615,11 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         }
 
         f += 1;
-        if (*f == '\0' || remaining == 0) {
+        if (remaining == 0) {
             break;
         } else if (info.base != 0) {
             // NOTE(cya): print a number
             if (info.flags & CY__FMT_INTS) {
-                if (info.precision == -1) {
-                    info.precision = 1;
-                }
-
                 if (info.flags & CY__FMT_UNSIGNED) {
                     u64 val;
                     switch (info.flags & CY__FMT_LEN_MODS) {
@@ -1565,43 +1682,28 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     len = cy__print_i64(end, remaining, &info, val);
                 }
             } else if (info.flags & CY__FMT_FLOAT) {
-                if (info.precision == -1) {
-                    if (info.base != 16) {
-                        info.precision = 6;
-                    }
-                } else {
-                    info.precision = CY_MIN(info.precision, 16);
-                }
-
-                f64 val = va_arg(va, f64);
+                f64 val = info.flags & CY__FMT_LEN_LONG_DOUBLE ?
+                    (f64)va_arg(va, long double) : va_arg(va, f64);
                 len = cy__print_f64(end, remaining, &info, val);
             }
         }
 
         end += len, remaining -= len;
-        if (len < info.width) {
-            isize extra = info.width - len;
+
+        b32 right_pad = info.flags & CY__FMT_MINUS;
+        b32 fill_with_zeros = !right_pad && (info.flags & CY__FMT_ZERO);
+        if (!fill_with_zeros && len < info.width) {
+            isize extra = (info.width - len);
             if (remaining < extra) {
-                break;
+                continue;
             }
 
-            b32 zero = info.flags & CY__FMT_ZERO;
-            // TODO(cya): handle all complex flag collisions with 0
-            char fill = zero ? '0' : ' ';
-            if (info.flags & CY__FMT_MINUS) {
-                cy_mem_set(end, fill, extra);
+            if (right_pad) {
+                cy_mem_set(end, ' ', extra);
             } else {
                 cy_mem_move(cur + extra, cur, len);
-                cy_mem_set(cur, fill, extra);
+                cy_mem_set(cur, ' ', extra);
             }
-
-            // TODO(cya): continue
-#if 0
-            char *first = 0;
-            if (zero && cy_char_is_in_set(*first, "+-")) {
-
-            }
-#endif
 
             end += extra, remaining -= extra;
         }
@@ -1665,7 +1767,7 @@ inline void *cy_resize(CyAllocator a, void *ptr, isize old_size, isize new_size)
     return cy_resize_align(a, ptr, old_size, new_size, CY_DEFAULT_ALIGNMENT);
 }
 
-CY_DEF inline void *cy_default_resize_align(
+inline void *cy_default_resize_align(
     CyAllocator a, void *old_mem, isize old_size, isize new_size, isize align
 ) {
     if (old_mem == NULL) {
@@ -1748,7 +1850,7 @@ CY_ALLOCATOR_PROC(cy_null_allocator_proc)
     return ptr;
 }
 
-CY_DEF CyAllocator cy_heap_allocator(void)
+inline CyAllocator cy_heap_allocator(void)
 {
     return (CyAllocator){
         .proc = cy_heap_allocator_proc,
@@ -2382,7 +2484,6 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
 }
 
 /* ------------------------- Pool Allocator Section ------------------------- */
-
 #if 0
 inline CyPool cy_pool_init(
     void *backing_buf, isize size, isize chunk_size, isize chunk_align
@@ -2469,6 +2570,11 @@ inline char cy_char_to_upper(char c) {
     return cy_char_is_lower(c) ? c - ('a' - 'A') : c;
 }
 
+inline char cy_char_with_case(char c, b32 uppercase)
+{
+    return uppercase ? cy_char_to_upper(c) : c;
+}
+
 inline i64 cy_digit_to_i64(char digit)
 {
     return cy_char_is_digit(digit) ? digit - '0' : digit - 'W';
@@ -2495,7 +2601,7 @@ inline isize cy_str_len(const char *str)
     }
 
     const char *begin = str;
-    while ((uintptr)str % sizeof(isize) != 0) {
+    while (!CY__IS_WORD_ALIGNED(str)) {
         if (*str == '\0') {
             return str - begin;
         }
@@ -2504,28 +2610,65 @@ inline isize cy_str_len(const char *str)
     }
 
     const isize *w = (const isize*)str;
-    while (!CY__HAS_ZERO_BYTE(*w)) w += 1;
+    while (!CY__HAS_ZERO_BYTE(*w)) {
+        w += 1;
+    }
 
     str = (const char*)w;
-    while (*str != '\0') str += 1;
+    while (*str != '\0') {
+        str += 1;
+    }
 
     return str - begin;
 }
 
 inline isize cy_wcs_len(const wchar_t *str)
 {
-    // TODO(cya): optimize(?)
-    isize len = 0;
-    while (*str++ != '\0') {
-        len += 1;
+    if (str == NULL) {
+        return 0;
     }
 
-    return len;
+    const wchar_t *begin = str;
+    while (!CY__IS_WORD_ALIGNED(str)) {
+        if (*str == '\0') {
+            return str - begin;
+        }
+
+        str += 1;
+    }
+
+    const isize *w = (const isize*)str;
+    while (!CY__HAS_ZERO_BYTE(*w)) {
+        w += 1;
+    }
+
+    str = (const wchar_t*)w;
+    while (*str != '\0') {
+        str += 1;
+    }
+    
+    return str - begin;
 }
 
-// TODO(cya): optimize(?)
 inline char *cy_str_copy(char *dst, const char *src)
 {
+    while (!CY__IS_WORD_ALIGNED(src)) {
+        if (*src == '\0') {
+            *dst = '\0';
+            return dst;
+        }
+
+        *dst++ = *src++;
+    }
+
+    isize *wd = (isize*)dst;
+    const isize *ws = (const isize*)src;
+    while (!CY__HAS_ZERO_BYTE(*ws)) {
+        *wd++ = *ws++;
+    }
+
+    dst = (char*)wd;
+    src = (const char*)ws;
     while (*src != '\0') {
         *dst++ = *src++;
     }
@@ -3036,8 +3179,7 @@ inline CyString cy_string_append_c(CyString str, const char *other)
 inline CyString cy_string_append_rune(CyString str, Rune r)
 {
     // TODO(cya): utf-8 encode rune
-    isize width = 1;
-    return cy_string_append_len(str, (const char*)&r, width);
+    return cy_string_append_len(str, (const char*)&r, 1);
 }
 
 CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
@@ -3047,7 +3189,7 @@ CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
 
     // TODO(cya): maybe have some fancier size handling than this?
     char buf[0x1000] = {0};
-    isize len = vsnprintf(buf, CY_ARRAY_LEN(buf), fmt, va);
+    isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
 
     va_end(va);
     return cy_string_append_len(str, buf, len);
@@ -3087,27 +3229,27 @@ inline CyString cy_string_prepend_c(CyString str, const char *other)
     return cy_string_prepend_len(str, other, cy_str_len(other));
 }
 
-CY_DEF CyString cy_string_prepend_rune(CyString str, Rune r)
+inline CyString cy_string_prepend_rune(CyString str, Rune r)
 {
     // TODO(cya): utf-8 encode rune
     isize width = 1;
     return cy_string_prepend_len(str, (const char*)&r, width);
 }
 
-CY_DEF CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...)
+inline CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
 
     // TODO(cya): maybe have some fancier size handling than this?
     char buf[0x1000] = {0};
-    isize len = vsnprintf(buf, CY_ARRAY_LEN(buf), fmt, va);
+    isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
 
     va_end(va);
     return cy_string_prepend_len(str, buf, len);
 }
 
-CY_DEF CyString cy_string_prepend_view(CyString str, CyStringView view)
+inline CyString cy_string_prepend_view(CyString str, CyStringView view)
 {
     return cy_string_prepend_len(str, (const char*)view.text, view.len);
 }
@@ -3503,12 +3645,14 @@ inline CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other)
     return cy_string_16_append_len(str, other, cy_wcs_len(other));
 }
 
-// TODO(cya): implement
-#if 0
 inline CyString16 cy_string_16_append_rune(CyString16 str, Rune r)
 {
-
+    // TODO(cya): utf-16 encode rune
+    return cy_string_16_append_len(str, (const wchar_t*)&r, 1);
 }
+
+#if 0
+extern int _vsnwprintf(wchar_t*, size_t, const wchar_t*, va_list);
 #endif
 
 CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...)
@@ -3595,11 +3739,8 @@ b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set)
 #endif // CY_OS_WINDOWS
 
 /* ============================ Unicode helpers ============================= */
-CY_DEF isize cy_utf8_codepoints(const char *str);
-
-/* ============================ Unicode helpers ============================= */
 #if 0
-static u8 cy__utf8_class_table[32] = {
+cy_global u8 cy__utf8_class_table[32] = {
     0, 0, 0, 0, // 0 = 0xxxx
     0, 0, 0, 0, // 1 = 10xxx
     0, 0, 0, 0, // 2 = 110xx
