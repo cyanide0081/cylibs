@@ -13,6 +13,11 @@ int main(void)
     printf("str:              `%s`\n", buf);
     printf("cy_str_copy(str): `%s`\n", buf);
     
+    cy_sprintf(buf, buf_size, "&str:       %p", (void*)str);
+    printf("%s\n", buf);
+    
+    printf("&str(libc): %p\n", (void*)str);
+    
     cy_sprintf(buf, buf_size, "ext int:             % 026i", 12345);
     printf("%s\n", buf);
     printf("ext int(libc):       % 026i\n", 12345);
@@ -125,6 +130,25 @@ int main(void)
         "time elapsed: %.3fμs\n",
         cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS)
     );
+    printf("\n");
+
+    unsigned oct = 1233;
+    cy_sprintf(buf, buf_size, "octal:        %o", oct);
+    printf("%s\n", buf);
+    cy_sprintf(buf, buf_size, "octal#:       %#o", oct);
+    printf("%s\n", buf);
+
+    printf("octal(libc):  %o\n", oct);
+    printf("octal(libc)#: %#o\n", oct);
+    
+    f32 flt = 3.00;
+    cy_sprintf(buf, buf_size, "float:        %g", flt);
+    printf("%s\n", buf);
+    cy_sprintf(buf, buf_size, "float#:       %#g", flt);
+    printf("%s\n", buf);
+
+    printf("float(libc):  %g\n", flt);
+    printf("float(libc)#: %#g\n", flt);
 
     return 0;
 }

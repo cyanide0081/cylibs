@@ -51,11 +51,11 @@
 
 #ifndef CY_STATIC_ASSERT
     // NOTE(cya): because C macro expansion bizarreness
-    #define CY_STATIC_ASSERT_INTERNAL_EX(cond, line) \
+    #define CY__STATIC_ASSERT_INTERNAL_EX(cond, line) \
         typedef char STATIC_ASSERTION_FAILED_AT_LINE_##line[!!(cond) * 2 - 1]
-    #define CY_STATIC_ASSERT_INTERNAL(cond, line) \
-        CY_STATIC_ASSERT_INTERNAL_EX(cond, line)
-    #define CY_STATIC_ASSERT(cond) CY_STATIC_ASSERT_INTERNAL(cond, __LINE__)
+    #define CY__STATIC_ASSERT_INTERNAL(cond, line) \
+        CY__STATIC_ASSERT_INTERNAL_EX(cond, line)
+    #define CY_STATIC_ASSERT(cond) CY__STATIC_ASSERT_INTERNAL(cond, __LINE__)
 #endif
 
 #ifndef NDEBUG
@@ -1039,9 +1039,12 @@ cy_global const char cy__num_to_char_table_lower[] = "0123456789abcdef";
 
 cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 {
-    const char *table = info->flags & CY__FMT_STYLE_UPPER ?
-        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
     i32 base = info->base;
+    b32 style_alt = (info->flags & CY__FMT_HASH);
+    b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
+    b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
+    const char *table = style_upper ?
+        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
     
     isize remaining = cap;
     char *c = dst;
@@ -1079,6 +1082,22 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
         }
     }
 
+    if (add_prefix && remaining > 0) {
+        switch (base) {
+        case 16: {
+            *c++ = cy_char_with_case('x', style_upper);
+            len += 1, remaining -= 1;
+            if (remaining < 1) {
+                break;
+            }
+        }
+        case 8: {
+            *c++ = '0';
+            len += 1, remaining -= 1;
+        } break;
+        }
+    }
+
     if (print_sign && remaining > 0) {
         char sign = '-';
         if (info->flags & CY__FMT_PLUS) {
@@ -1097,9 +1116,13 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 
 cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
 {
-    const char *table = info->flags & CY__FMT_STYLE_UPPER ?
-        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
     i32 base = info->base;
+    b32 style_alt = (info->flags & CY__FMT_HASH);
+    b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
+    b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
+    const char *table = style_upper ?
+        cy__num_to_char_table_upper : cy__num_to_char_table_lower;
+    
     b32 negative = false;
     if (n < 0) {
         negative = true;
@@ -1140,6 +1163,22 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         while (extra-- > 0 && remaining > 0) {
             *c++ = '0';
             len += 1, remaining -= 1;
+        }
+    }
+
+    if (add_prefix && remaining > 0) {
+        switch (base) {
+        case 16: {
+            *c++ = cy_char_with_case('x', style_upper);
+            len += 1, remaining -= 1;
+            if (remaining < 1) {
+                break;
+            }
+        }
+        case 8: {
+            *c++ = '0';
+            len += 1, remaining -= 1;
+        } break;
         }
     }
 
@@ -1248,6 +1287,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 style_hex = info->base == 16;
     b32 style_exp = info->flags & CY__FMT_STYLE_EXP;
     b32 style_auto = info->flags & CY__FMT_STYLE_AUTO;
+    b32 style_alt = info->flags & CY__FMT_HASH;
 
     if (style_hex) {
         cur += cy__print_str(cur, cap, info, upper ? "0X" : "0x");
@@ -1333,17 +1373,17 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         }
     }
 
-    b32 print_decimal = precision > 0 && remaining > 2;
-    if (style_auto && decimal == 0) {
-        print_decimal = false;
-    }
-
-    if (print_decimal) {
+    b32 print_decimal = precision > 0 &&
+        !(style_auto && !style_alt && decimal == 0);
+    b32 print_dot = print_decimal || style_alt;
+    if (print_dot && remaining > 0) {
         *cur++ = '.';
         remaining -= 1;
-
+    }
+    
+    if (print_decimal && remaining > 0) {
         char *c = cur;
-        if (!style_auto) {
+        if (!style_auto || style_alt) {
             i32 extra_digits = info->precision - precision;
             while (extra_digits > 0 && remaining > 0) {
                 *c++ = '0';
@@ -1415,12 +1455,15 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 }
 
 // TODO(cya):
-// * make the function calculate how many bytes it *would* write into the array
-//   had it been large enough and just discard them before returning the length
+// * write each conversion to a 4096-byte buffer before appending it to dst
+// * make the proc itself and every print_* proc calculate how many bytes
+//   it _would_ write into the array had it been large enough and just discard
+//   them in case the capacity is insufficient
+// * fix rounding errors on binary exponentiation
 // * implement extended format specifiers
 //     * %q for bools
 //     * %b for binary int
-//     * %cv for cystringviews
+//     * %sv for stringviews
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
     isize remaining = size - 1;
@@ -1597,9 +1640,15 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
         } break;
         case 'p': {
-
+            void *ptr = va_arg(va, void*);
+            len = cy__print_u64(end, remaining, &(CyFmtInfo){
+                .base = 16,
+                .flags = CY__FMT_ZERO,
+                .width = 16,
+            }, (u64)ptr);
         } break;
         case 'n': {
+            len = 0;
             int *out = va_arg(va, int*);
             if (out != NULL) {
                 *out = (int)(end - buf);
@@ -3264,7 +3313,6 @@ CyString cy_string_pad_right(CyString str, isize width, Rune r)
         str_width += rune_width;
     }
 
-    CY_VALIDATE_PTR(str);
     return str;
 }
 
