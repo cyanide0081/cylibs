@@ -4349,7 +4349,6 @@ inline isize cy_file_tell(CyFile *f)
 
     f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_CURRENT, &new_offset);
     return new_offset;
-
 }
 
 #if defined(CY_OS_WINDOWS)
