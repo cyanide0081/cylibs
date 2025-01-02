@@ -101,6 +101,13 @@
     #define CY_DEF extern
 #endif
 
+#if defined(__clang__) || defined(__GNUC__)
+    #define CY__PRINTF_ATTR(fmt) \
+        __attribute__((format(printf, fmt, (fmt) + 1)))
+#else
+    #define CY__PRINTF_ATTR(fmt)
+#endif
+
 /* ================================= Types ================================== */
 #include <stdint.h>
 
@@ -271,50 +278,6 @@ CY_DEF CyTicks cy_ticks_query(void);
 CY_DEF CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end);
 CY_DEF f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit);
 
-/* ================================== Files ================================= */
-typedef struct {
-    i32 placeholder;
-} CyFile;
-
-typedef enum {
-    CY_FILE_STD_IN,
-    CY_FILE_STD_OUT,
-    CY_FILE_STD_ERR,
-} CyFileStdType;
-
-#if 0
-CY_DEF CyFile *cy_file_get_std(CyFileStdType type)
-{
-    // TODO(cya): implement
-    return NULL;
-}
-#endif
-
-/* =================================== I/O ================================== */
-#define CY_IO_INTERNAL_BUF_SIZE 4096
-
-#if defined(__clang__) || defined(__GNUC__)
-    #define CY__PRINTF_ATTR(fmt) \
-        __attribute__((format(printf, fmt, (fmt) + 1)))
-#else
-    #define CY__PRINTF_ATTR(fmt)
-#endif
-
-// TODO(cya): add gcc/clang type warning builtins
-CY_DEF isize cy_printf(const char *fmt, ...) CY__PRINTF_ATTR(1);
-CY_DEF isize cy_printf_err(const char *fmt, ...) CY__PRINTF_ATTR(1);
-
-CY_DEF isize cy_printf_va(const char *fmt, va_list va);
-CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
-
-CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__PRINTF_ATTR(2);
-CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
-
-CY_DEF isize cy_sprintf(
-    char *buf, isize size, const char *fmt, ...
-) CY__PRINTF_ATTR(3);
-CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
-
 /* =============================== Allocators =============================== */
 typedef enum {
     CY_ALLOCATION_ALLOC,
@@ -386,7 +349,7 @@ CY_DEF char *cy_alloc_string(CyAllocator a, const char *str);
 
 // NOTE(cya): works with power-of-two alignments
 #define CY__IS_ALIGNED(p, a) (((uintptr)(p) & (uintptr)((a) - 1)) == 0)
-#define CY__IS_WORD_ALIGNED(p) CY__IS_ALIGNED(p, sizeof(usize)) 
+#define CY__IS_WORD_ALIGNED(p) CY__IS_ALIGNED(p, sizeof(usize))
 
 #define CY_VALIDATE_PTR(p) if (p == NULL) return NULL
 
@@ -714,17 +677,180 @@ CY_DEF b32 cy_string_16_view_contains(
 /* ============================ Unicode helpers ============================= */
 CY_DEF isize cy_utf8_codepoints(const char *str);
 
+/* ================================== Files ================================= */
+typedef enum {
+    CY_FILE_MODE_READ = CY_BIT(0),
+    CY_FILE_MODE_WRITE = CY_BIT(1),
+    CY_FILE_MODE_APPEND = CY_BIT(2),
+    CY_FILE_MODE_READ_WRITE = CY_BIT(3),
+
+    CY__FILE_MODE_MODES =  CY_FILE_MODE_READ | CY_FILE_MODE_WRITE |
+        CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE
+} CyFileMode;
+
+typedef enum {
+    CY_SEEK_WHENCE_BEGIN,
+    CY_SEEK_WHENCE_CURRENT,
+    CY_SEEK_WHENCE_END,
+} CySeekWhenceType;
+
+// TODO(cya): maybe change some of these names later
+typedef enum {
+    CY_FILE_ERROR_OUT_OF_MEMORY = -1,
+    CY_FILE_ERROR_NONE,
+    CY_FILE_ERROR_INVALID,
+    CY_FILE_ERROR_INVALID_FILENAME,
+    CY_FILE_ERROR_EXISTS,
+    CY_FILE_ERROR_NOT_FOUND,
+    CY_FILE_ERROR_NO_PERMISSION,
+    CY_FILE_ERROR_TRUNCATION_FAILED,
+} CyFileError;
+
+typedef union {
+    void *p;
+    uintptr u;
+    intptr i;
+} CyFileDescriptor;
+
+typedef struct CyFileOps CyFileOps;
+
+#define CY_FILE_OPEN_PROC(name) CyFileError name( \
+    CyFileDescriptor *fd, CyFileOps *ops, \
+    CyFileMode mode, const char *filename \
+)
+#define CY_FILE_READ_AT_PROC(name) b32 name( \
+    CyFileDescriptor fd, void *buf, \
+    isize size, isize offset, isize *bytes_read \
+)
+#define CY_FILE_WRITE_AT_PROC(name) b32 name( \
+    CyFileDescriptor fd, const void *buf, \
+    isize size, isize offset, isize *bytes_written \
+)
+#define CY_FILE_SEEK_PROC(name) b32 name( \
+    CyFileDescriptor fd, isize offset, \
+    CySeekWhenceType whence, isize *new_offset \
+)
+#define CY_FILE_CLOSE_PROC(name) void name(CyFileDescriptor fd)
+
+typedef CY_FILE_OPEN_PROC(CyFileOpenProc);
+typedef CY_FILE_READ_AT_PROC(CyFileReadAtProc);
+typedef CY_FILE_WRITE_AT_PROC(CyFileWriteAtProc);
+typedef CY_FILE_SEEK_PROC(CyFileSeekProc);
+typedef CY_FILE_CLOSE_PROC(CyFileCloseProc);
+
+struct CyFileOps {
+    CyFileReadAtProc *read_at;
+    CyFileWriteAtProc *write_at;
+    CyFileSeekProc *seek;
+    CyFileCloseProc *close;
+};
+
+extern const CyFileOps cy__default_file_ops;
+
+typedef u64 CyFileTime;
+
+typedef struct {
+    CyFileOps ops;
+    CyFileDescriptor fd;
+    const char *filename;
+    CyFileTime last_write_time;
+} CyFile;
+
+// TODO(cya): async file and dir info (?)
+
+typedef enum {
+    CY_FILE_STD_IN,
+    CY_FILE_STD_OUT,
+    CY_FILE_STD_ERR,
+    CY__FILE_STD_COUNT
+} CyFileStdType;
+
+CY_DEF CyFile *cy_file_get_std_handle(CyFileStdType type);
+
+// TODO(cya): temp file proc (?)
+
+CY_DEF CyFileError cy_file_create(CyFile *f, const char *filename);
+CY_DEF CyFileError cy_file_open(CyFile *f, const char *filename);
+CY_DEF CyFileError cy_file_open_with_mode(
+    CyFile *f, CyFileMode mode, const char *filename
+);
+CY_DEF CyFileError cy_file_new(
+    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
+);
+CY_DEF CyFileError cy_file_close(CyFile *f);
+CY_DEF CyFileError cy_file_truncate(CyFile *f, isize size);
+
+CY_DEF b32 cy_file_read_at_report(
+    CyFile *f, void *buf,
+    isize size, isize offset, isize *bytes_read
+);
+CY_DEF b32 cy_file_write_at_report(
+    CyFile *f, const void *buf,
+    isize size, isize offset, isize *bytes_written
+);
+CY_DEF b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset);
+CY_DEF b32 cy_file_write_at(
+    CyFile *f, const void *buf, isize size, isize offset
+);
+CY_DEF b32 cy_file_read(CyFile *f, void *buf, isize size);
+CY_DEF b32 cy_file_write(CyFile *f, const void *buf, isize size);
+
+CY_DEF isize cy_file_seek(CyFile *f, isize offset);
+CY_DEF isize cy_file_seek_to_end(CyFile *f);
+CY_DEF isize cy_file_skip(CyFile *f, isize bytes);
+CY_DEF isize cy_file_tell(CyFile *f);
+
+CY_DEF isize cy_file_size(CyFile *f);
+CY_DEF const char *cy_file_name(CyFile *f);
+CY_DEF b32 cy_file_has_changed(CyFile *f);
+
+
+CY_DEF b32 cy_file_path_exists(const char *filename);
+CY_DEF CyFileTime cy_file_path_last_write_time(const char *filename);
+CY_DEF CyFileTime cy_file_path_copy(
+    const char *cur_filename, const char *new_filename, b32 fail_if_exists
+);
+CY_DEF CyFileTime cy_file_path_move(
+    const char *cur_filename, const char *new_filename
+);
+CY_DEF CyFileTime cy_file_path_remove(const char *filename);
+
+#if defined(CY_OS_WINDOWS)
+    #define CY_PATH_SEPARATOR '\\'
+#else
+    #define CY_PATH_SEPARATOR '/'
+#endif
+
+CY_DEF b32 cy_path_is_absolute(const char *path);
+CY_DEF b32 cy_path_is_relative(const char *path);
+CY_DEF b32 cy_path_is_root(const char *path);
+
+CY_DEF const char *cy_path_base_name(const char *path);
+CY_DEF const char *cy_path_extension(const char *path);
+
+CY_DEF CyString cy_path_full_version(const char *path);
+
+/* =================================== I/O ================================== */
+// TODO(cya): add gcc/clang type warning builtins
+CY_DEF isize cy_printf(const char *fmt, ...) CY__PRINTF_ATTR(1);
+CY_DEF isize cy_printf_err(const char *fmt, ...) CY__PRINTF_ATTR(1);
+
+CY_DEF isize cy_printf_va(const char *fmt, va_list va);
+CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
+
+CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__PRINTF_ATTR(2);
+CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
+
+CY_DEF isize cy_sprintf(
+    char *buf, isize size, const char *fmt, ...
+) CY__PRINTF_ATTR(3);
+CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
+
 /******************************************************************************
  *                               IMPLEMENTATION                               *
  ******************************************************************************/
 #ifdef CY_IMPLEMENTATION
 /* ================================= Runtime ================================ */
-
-#include <stdio.h>
-
-#define cy_printf printf
-#define cy_printf_err(...) fprintf(stderr, __VA_ARGS__) 
-#define cy_printf_err_va(...) vfprintf(stderr, __VA_ARGS__) 
 
 void cy_handle_assertion(
     const char *prefix,
@@ -860,7 +986,6 @@ inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
 }
 
 /* =================================== I/O ================================== */
-#if 0
 inline isize cy_printf(const char *fmt, ...)
 {
     va_list va;
@@ -883,12 +1008,12 @@ inline isize cy_printf_err(const char *fmt, ...)
 
 inline isize cy_printf_va(const char *fmt, va_list va)
 {
-    return cy_fprintf_va(cy_file_get_std(CY_FILE_STD_OUT), fmt, va);
+    return cy_fprintf_va(cy_file_get_std_handle(CY_FILE_STD_OUT), fmt, va);
 }
 
 inline isize cy_printf_err_va(const char *fmt, va_list va)
 {
-    return cy_fprintf_va(cy_file_get_std(CY_FILE_STD_ERR), fmt, va);
+    return cy_fprintf_va(cy_file_get_std_handle(CY_FILE_STD_ERR), fmt, va);
 }
 
 inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
@@ -901,16 +1026,17 @@ inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
     return len;
 }
 
+#define CY__IO_INTERNAL_BUF_SIZE 4096
+
 inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
-    cy_persist char buf[CY_IO_INTERNAL_BUF_SIZE];
+    cy_persist char buf[CY__IO_INTERNAL_BUF_SIZE];
     isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
 
-    // TODO(cya): write to file
+    cy_file_write(f, buf, len);
 
     return len;
 }
-#endif
 
 inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
 {
@@ -1045,7 +1171,7 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
     b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
-    
+
     isize remaining = cap;
     char *c = dst;
     if (n == 0) {
@@ -1074,7 +1200,7 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
     b32 print_sign = (info->flags & CY__FMT_PLUS) ||
         (info->flags & CY__FMT_SPACE);
     isize sign_len = !!print_sign;
-    if (fill_with_zeros && remaining > 0) {    
+    if (fill_with_zeros && remaining > 0) {
         isize extra = info->width - len - sign_len;
         while (extra-- > 0 && remaining > 0) {
             *c++ = '0';
@@ -1105,7 +1231,7 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
         } else if (info->flags & CY__FMT_SPACE) {
             sign = ' ';
         }
-        
+
         *c++ = sign;
         len += 1, remaining -= 1;
     }
@@ -1122,7 +1248,7 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
     b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
-    
+
     b32 negative = false;
     if (n < 0) {
         negative = true;
@@ -1158,7 +1284,7 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
     b32 print_sign = negative ||
         (info->flags & CY__FMT_PLUS) || (info->flags & CY__FMT_SPACE);
     isize sign_len = !!print_sign;
-    if (fill_with_zeros && remaining > 0) {    
+    if (fill_with_zeros && remaining > 0) {
         isize extra = info->width - len - sign_len;
         while (extra-- > 0 && remaining > 0) {
             *c++ = '0';
@@ -1189,7 +1315,7 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         } else if (info->flags & CY__FMT_SPACE) {
             sign = ' ';
         }
-        
+
         *c++ = sign;
         len += 1, remaining -= 1;
     }
@@ -1303,7 +1429,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     } else if (!style_hex) {
         precision = 6;
     }
-    
+
     i16 exponent = 0;
     f64 normalized = n;
     if (style_exp || style_auto) {
@@ -1380,7 +1506,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         *cur++ = '.';
         remaining -= 1;
     }
-    
+
     if (print_decimal && remaining > 0) {
         char *c = cur;
         if (!style_auto || style_alt) {
@@ -1444,7 +1570,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         if (remaining >= extra) {
             cy_mem_move(num_start + extra, num_start, len - prefix_len);
             cy_mem_set(num_start, '0', extra);
-            
+
             remaining -= extra;
         }
 
@@ -1477,6 +1603,21 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
     const char *f = fmt;
     for (;;) {
         while (*f != '\0' && *f != '%' && remaining > 0) {
+#if defined(CY_OS_WINDOWS)
+            // NOTE(cya): CRLF conversion
+            if (*f == '\n') {
+                if (end - buf < 1 || *(end - 1) != '\r') {
+                    *end++ = *f++;
+                    remaining -= 1;
+                } else {
+                    *end++ = '\r';
+                    remaining -= 1;
+                }
+
+                continue;
+            }
+#endif
+
             *end++ = *f++;
             remaining -= 1;
         }
@@ -1742,14 +1883,14 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         b32 right_pad = info.flags & CY__FMT_MINUS;
         b32 fill_with_zeros = !right_pad && (info.flags & CY__FMT_ZERO);
         if (!fill_with_zeros && len < info.width) {
-            isize extra = (info.width - len);
-            if (remaining < extra) {
-                continue;
-            }
+            isize extra = CY_MIN(info.width - len, remaining);
+            // if (remaining < extra) {
+            //     continue;
+            // }
 
             if (right_pad) {
                 cy_mem_set(end, ' ', extra);
-            } else {
+            } else { // NOTE(cya): npm
                 cy_mem_move(cur + extra, cur, len);
                 cy_mem_set(cur, ' ', extra);
             }
@@ -2695,7 +2836,7 @@ inline isize cy_wcs_len(const wchar_t *str)
     while (*str != '\0') {
         str += 1;
     }
-    
+
     return str - begin;
 }
 
@@ -3699,9 +3840,7 @@ inline CyString16 cy_string_16_append_rune(CyString16 str, Rune r)
     return cy_string_16_append_len(str, (const wchar_t*)&r, 1);
 }
 
-#if 0
 extern int _vsnwprintf(wchar_t*, size_t, const wchar_t*, va_list);
-#endif
 
 CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...)
 {
@@ -3834,6 +3973,425 @@ inline isize cy_utf8_codepoints(const char *str)
 
     return count;
 }
+
+/* ================================== Files ================================= */
+cy_global CyFile cy__std_files[CY__FILE_STD_COUNT];
+cy_global b32 cy__std_files_set;
+
+#if defined(CY_OS_WINDOWS)
+cy_internal CyFileReadAtProc cy__win32_file_read;
+cy_internal CyFileWriteAtProc cy__win32_file_write;
+cy_internal CyFileSeekProc cy__win32_file_seek;
+cy_internal CyFileCloseProc cy__win32_file_close;
+
+const CyFileOps cy__default_file_ops = {
+    cy__win32_file_read,
+    cy__win32_file_write,
+    cy__win32_file_seek,
+    cy__win32_file_close,
+};
+
+cy_internal CyString16 cy__win32_utf8_to_utf16(CyAllocator a, const char *str)
+{
+    CY_VALIDATE_PTR(str);
+
+    isize len = cy_str_len(str);
+    isize size_utf16 = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len + 1,
+        NULL, 0
+    );
+    isize len_utf16 = size_utf16 - 1;
+    CyString16 str_utf16 = cy_string_16_create_reserve(a, size_utf16);
+    CY_VALIDATE_PTR(str_utf16);
+
+    isize res = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len + 1,
+        str_utf16, size_utf16 + 1
+    );
+    if (res == 0) {
+        cy_string_16_free(str_utf16);
+        return NULL;
+    }
+
+    cy__string_16_set_len(str_utf16, len_utf16);
+    return str_utf16;
+}
+
+cy_internal CY_FILE_OPEN_PROC(cy__win32_file_open)
+{
+    if (filename == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    DWORD desired_access, creation_disposition;
+    switch (mode & CY__FILE_MODE_MODES) {
+    case CY_FILE_MODE_READ: {
+        desired_access = GENERIC_READ;
+        creation_disposition = OPEN_EXISTING;
+    } break;
+    case CY_FILE_MODE_WRITE: {
+        desired_access = GENERIC_WRITE;
+        creation_disposition = CREATE_ALWAYS;
+    } break;
+    case CY_FILE_MODE_APPEND: {
+        desired_access = GENERIC_WRITE;
+        creation_disposition = OPEN_ALWAYS;
+    } break;
+    case CY_FILE_MODE_READ | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = OPEN_EXISTING;
+    } break;
+    case CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = CREATE_ALWAYS;
+    } break;
+    case CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = OPEN_ALWAYS;
+    } break;
+    default: {
+        // TODO(cya): panic
+        return CY_FILE_ERROR_INVALID;
+    } break;
+    }
+
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    DWORD file_share_mode = FILE_SHARE_READ | FILE_SHARE_DELETE;
+    HANDLE handle = CreateFileW(
+        filename_16,desired_access, file_share_mode, NULL,
+        creation_disposition, FILE_ATTRIBUTE_NORMAL, NULL
+    );
+
+    cy_free(a, filename_16);
+    if (handle == INVALID_HANDLE_VALUE) {
+        switch (GetLastError()) {
+        case ERROR_FILE_NOT_FOUND: {
+            return CY_FILE_ERROR_NOT_FOUND;
+        } break;
+        case ERROR_FILE_EXISTS:
+        case ERROR_ALREADY_EXISTS: {
+            return CY_FILE_ERROR_EXISTS;
+        } break;
+        case ERROR_ACCESS_DENIED: {
+            return CY_FILE_ERROR_NO_PERMISSION;
+        } break;
+        default: {
+            return CY_FILE_ERROR_INVALID;
+        } break;
+        }
+    }
+
+    if (mode & CY_FILE_MODE_APPEND) {
+        LARGE_INTEGER ofs = {0};
+        if (!SetFilePointerEx(handle, ofs, NULL, FILE_END)) {
+            CloseHandle(handle);
+            return CY_FILE_ERROR_INVALID;
+        }
+    }
+
+    fd->p = handle;
+    *ops = cy__default_file_ops;
+
+    return CY_FILE_ERROR_NONE;
+}
+
+cy_internal CY_FILE_READ_AT_PROC(cy__win32_file_read)
+{
+    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
+    DWORD _bytes_read;
+    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
+    if (ReadFile(fd.p, buf, truncated_size, &_bytes_read, NULL)) {
+        if (bytes_read != NULL) {
+            *bytes_read = _bytes_read;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+cy_internal CY_FILE_WRITE_AT_PROC(cy__win32_file_write)
+{
+    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
+    DWORD _bytes_written;
+    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
+    if (WriteFile(fd.p, buf, truncated_size, &_bytes_written, NULL)) {
+        if (bytes_written != NULL) {
+            *bytes_written = _bytes_written;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+cy_internal CY_FILE_SEEK_PROC(cy__win32_file_seek)
+{
+    LARGE_INTEGER li_offset = {.QuadPart = offset};
+    if (!SetFilePointerEx(fd.p, li_offset, &li_offset, whence)) {
+        return false;
+    }
+
+    if (new_offset != NULL) {
+        *new_offset = li_offset.QuadPart;
+    }
+
+    return true;
+}
+
+cy_internal CY_FILE_CLOSE_PROC(cy__win32_file_close)
+{
+    CloseHandle(fd.p);
+}
+
+CyFile *cy_file_get_std_handle(CyFileStdType type)
+{
+    if (!cy__std_files_set) {
+#define CY__SET_STD_FILE(type, val) { \
+    cy__std_files[type].fd.p = val; \
+    cy__std_files[type].ops = cy__default_file_ops; \
+} CY_NOOP()
+        CY__SET_STD_FILE(CY_FILE_STD_IN, GetStdHandle(STD_INPUT_HANDLE));
+        CY__SET_STD_FILE(CY_FILE_STD_OUT, GetStdHandle(STD_OUTPUT_HANDLE));
+        CY__SET_STD_FILE(CY_FILE_STD_ERR, GetStdHandle(STD_ERROR_HANDLE));
+#undef CY__SET_STD_FILE
+
+        cy__std_files_set = true;
+    }
+
+    return &cy__std_files[type];
+}
+
+#else // POSIX files
+//  TODO(cya): implement
+#endif
+
+
+inline CyFileError cy_file_create(CyFile *f, const char *filename)
+{
+    return cy_file_open_with_mode(
+        f, CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE, filename
+    );
+}
+
+inline CyFileError cy_file_open(CyFile *f, const char *filename)
+{
+    return cy_file_open_with_mode(f, CY_FILE_MODE_READ, filename);
+}
+
+CyFileError cy_file_open_with_mode(
+    CyFile *f, CyFileMode mode, const char *filename
+) {
+    CyFileError err =
+#if defined(CY_OS_WINDOWS)
+        cy__win32_file_open(&f->fd, &f->ops, mode, filename);
+#else
+        cy__posix_file_open(&f->fd, &f->ops, mode, filename);
+#endif
+
+    return err != CY_FILE_ERROR_NONE ?
+        err : cy_file_new(f, f->fd, f->ops, filename);
+}
+
+inline CyFileError cy_file_new(
+    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
+) {
+    isize len = cy_str_len(filename);
+    // TODO(cya): maybe filename should be a CyString
+    *f = (CyFile){
+        .ops = ops,
+        .fd = fd,
+        .filename = cy_alloc_copy(cy_heap_allocator(), filename, len + 1),
+        .last_write_time = cy_file_path_last_write_time(filename),
+    };
+    if (f->filename == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    return CY_FILE_ERROR_NONE;
+}
+
+inline CyFileError cy_file_close(CyFile *f)
+{
+    if (f == NULL) {
+        return CY_FILE_ERROR_INVALID;
+    }
+
+    if (f->filename != NULL) {
+        cy_free(cy_heap_allocator(), (void*)f->filename);
+    }
+
+    b32 invalid =
+#if defined(CY_OS_WINDOWS)
+        (f->fd.p == INVALID_HANDLE_VALUE);
+#else
+        (f->fd.i < 0);
+#endif
+    if (invalid) {
+        return CY_FILE_ERROR_INVALID;
+    }
+
+    if (f->ops.read_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.close(f->fd);
+    return CY_FILE_ERROR_NONE;
+}
+
+#if defined(CY_OS_WINDOWS)
+inline CyFileError cy_file_truncate(CyFile *f, isize size)
+{
+    CyFileError err = CY_FILE_ERROR_NONE;
+
+    isize prev_offset = cy_file_tell(f);
+    cy_file_seek(f, size);
+    if (!SetEndOfFile(f->fd.p)) {
+        err = CY_FILE_ERROR_TRUNCATION_FAILED;
+    }
+
+    cy_file_seek(f, prev_offset);
+    return err;
+}
+#else
+
+#endif
+
+inline b32 cy_file_read_at_report(
+    CyFile *f, void *buf,
+    isize size, isize offset, isize *bytes_read
+) {
+    if (f->ops.read_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    return f->ops.read_at(f->fd, buf, size, offset, bytes_read);
+}
+
+inline b32 cy_file_write_at_report(
+    CyFile *f, const void *buf,
+    isize size, isize offset, isize *bytes_written
+) {
+    if (f->ops.write_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    return f->ops.write_at(f->fd, buf, size, offset, bytes_written);
+}
+
+inline b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset)
+{
+    return cy_file_read_at_report(f, buf, size, offset, NULL);
+}
+
+inline b32 cy_file_write_at(
+    CyFile *f, const void *buf, isize size, isize offset
+) {
+    return cy_file_write_at_report(f, buf, size, offset, NULL);
+}
+
+inline b32 cy_file_read(CyFile *f, void *buf, isize size)
+{
+    return cy_file_read_at(f, buf, size, cy_file_tell(f));
+}
+
+inline b32 cy_file_write(CyFile *f, const void *buf, isize size)
+{
+    return cy_file_write_at(f, buf, size, cy_file_tell(f));
+}
+
+inline isize cy_file_seek(CyFile *f, isize offset)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, offset, CY_SEEK_WHENCE_BEGIN, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_seek_to_end(CyFile *f)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_END, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_skip(CyFile *f, isize bytes)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, bytes, CY_SEEK_WHENCE_CURRENT, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_tell(CyFile *f)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_CURRENT, &new_offset);
+    return new_offset;
+
+}
+
+CY_DEF isize cy_file_size(CyFile *f);
+CY_DEF const char *cy_file_name(CyFile *f);
+CY_DEF b32 cy_file_has_changed(CyFile *f);
+
+CY_DEF b32 cy_file_path_exists(const char *filename);
+
+#if defined(CY_OS_WINDOWS)
+CyFileTime cy_file_path_last_write_time(const char *filename)
+{
+    ULARGE_INTEGER li = {0};
+    FILETIME last_write_time = {0};
+    WIN32_FILE_ATTRIBUTE_DATA attr = {0};
+
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return 0;
+    }
+
+    if (GetFileAttributesExW(filename_16, GetFileExInfoStandard, &attr)) {
+        last_write_time = attr.ftLastWriteTime;
+    }
+
+    cy_string_16_free(filename_16);
+
+    li.LowPart = last_write_time.dwLowDateTime;
+    li.HighPart = last_write_time.dwHighDateTime;
+    return (CyFileTime)li.QuadPart;
+}
+#endif
+
+CY_DEF CyFileTime cy_file_path_copy(
+    const char *cur_filename, const char *new_filename, b32 fail_if_exists
+);
+CY_DEF CyFileTime cy_file_path_move(
+    const char *cur_filename, const char *new_filename
+);
+CY_DEF CyFileTime cy_file_path_remove(const char *filename);
 
 #endif // CY_IMPLEMENTATION
 #endif // _CY_H
