@@ -3975,6 +3975,7 @@ inline isize cy_utf8_codepoints(const char *str)
 }
 
 /* ================================== Files ================================= */
+// TODO(cya): maybe don't do this (?)
 cy_global CyFile cy__std_files[CY__FILE_STD_COUNT];
 cy_global b32 cy__std_files_set;
 
@@ -4175,7 +4176,6 @@ CyFile *cy_file_get_std_handle(CyFileStdType type)
 //  TODO(cya): implement
 #endif
 
-
 inline CyFileError cy_file_create(CyFile *f, const char *filename)
 {
     return cy_file_open_with_mode(
@@ -4224,9 +4224,7 @@ inline CyFileError cy_file_close(CyFile *f)
 {
     if (f == NULL) {
         return CY_FILE_ERROR_INVALID;
-    }
-
-    if (f->filename != NULL) {
+    } else if (f->filename != NULL) {
         cy_free(cy_heap_allocator(), (void*)f->filename);
     }
 
@@ -4354,13 +4352,50 @@ inline isize cy_file_tell(CyFile *f)
 
 }
 
-CY_DEF isize cy_file_size(CyFile *f);
-CY_DEF const char *cy_file_name(CyFile *f);
-CY_DEF b32 cy_file_has_changed(CyFile *f);
-
-CY_DEF b32 cy_file_path_exists(const char *filename);
-
 #if defined(CY_OS_WINDOWS)
+inline isize cy_file_size(CyFile *f)
+{
+    LARGE_INTEGER size;
+    GetFileSizeEx(f->fd.p, &size);
+    return (isize)size.QuadPart;
+}
+
+inline const char *cy_file_name(CyFile *f)
+{
+    return f->filename == NULL ? "" : f->filename;
+}
+
+inline b32 cy_file_has_changed(CyFile *f)
+{
+    CyFileTime last_write_time = cy_file_path_last_write_time(f->filename);
+    b32 changed = (f->last_write_time != last_write_time);
+    if (changed) {
+        f->last_write_time = last_write_time;
+    }
+
+    return changed;
+}
+
+b32 cy_file_path_exists(const char *filename)
+{
+    WIN32_FIND_DATAW data;
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return false;
+    }
+
+    HANDLE handle = FindFirstFileW(filename_16, &data);
+    cy_string_16_free(filename_16);
+
+    b32 found = (handle != INVALID_HANDLE_VALUE);
+    if (found) {
+        FindClose(handle);
+    }
+
+    return found;
+}
+
 CyFileTime cy_file_path_last_write_time(const char *filename)
 {
     ULARGE_INTEGER li = {0};
@@ -4383,15 +4418,64 @@ CyFileTime cy_file_path_last_write_time(const char *filename)
     li.HighPart = last_write_time.dwHighDateTime;
     return (CyFileTime)li.QuadPart;
 }
-#endif
 
-CY_DEF CyFileTime cy_file_path_copy(
+CyFileTime cy_file_path_copy(
     const char *cur_filename, const char *new_filename, b32 fail_if_exists
-);
-CY_DEF CyFileTime cy_file_path_move(
-    const char *cur_filename, const char *new_filename
-);
-CY_DEF CyFileTime cy_file_path_remove(const char *filename);
+) {
+    b32 res = false;
+    CyAllocator a = cy_heap_allocator();
+
+    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
+    if (cur_filename_16 == NULL) {
+        return false;
+    }
+
+    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
+    if (new_filename_16 != NULL) {
+        res = CopyFileW(cur_filename_16, new_filename_16, fail_if_exists);
+    }
+
+    cy_string_16_free(new_filename_16);
+    cy_string_16_free(cur_filename_16);
+    return res;
+}
+
+CyFileTime cy_file_path_move(const char *cur_filename, const char *new_filename)
+{
+    b32 res = false;
+    CyAllocator a = cy_heap_allocator();
+
+    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
+    if (cur_filename_16 == NULL) {
+        return false;
+    }
+
+    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
+    if (new_filename_16 != NULL) {
+        res = MoveFileW(cur_filename_16, new_filename_16);
+    }
+
+    cy_string_16_free(new_filename_16);
+    cy_string_16_free(cur_filename_16);
+    return res;
+}
+
+CyFileTime cy_file_path_remove(const char *filename)
+{
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return false;
+    }
+
+    b32 res = DeleteFileW(filename_16);
+    cy_string_16_free(filename_16);
+    return res;
+}
+
+#else // POSIX
+
+#endif
 
 #endif // CY_IMPLEMENTATION
 #endif // _CY_H
