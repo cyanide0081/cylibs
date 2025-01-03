@@ -102,10 +102,10 @@
 #endif
 
 #if defined(__clang__) || defined(__GNUC__)
-    #define CY__PRINTF_ATTR(fmt) \
+    #define CY__FMT_ATTR(fmt) \
         __attribute__((format(printf, fmt, (fmt) + 1)))
 #else
-    #define CY__PRINTF_ATTR(fmt)
+    #define CY__FMT_ATTR(fmt)
 #endif
 
 /* ================================= Types ================================== */
@@ -151,6 +151,11 @@ typedef i32 b32; // NOTE(cya): should be faster to address these
 #ifndef false
     #define false (0 != 0)
 #endif
+
+// NOTE(cya): forward declarations for using the types in other procs
+typedef char *CyString;
+typedef struct CyStringView CyStringView;
+typedef struct CyAllocator CyAllocator;
 
 /* --------------------------------- Limits --------------------------------- */
 #define U8_MIN 0U
@@ -278,6 +283,177 @@ CY_DEF CyTicks cy_ticks_query(void);
 CY_DEF CyTicks cy_ticks_elapsed(CyTicks start, CyTicks end);
 CY_DEF f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit);
 
+/* ================================== Files ================================= */
+typedef enum {
+    CY_FILE_MODE_READ = CY_BIT(0),
+    CY_FILE_MODE_WRITE = CY_BIT(1),
+    CY_FILE_MODE_APPEND = CY_BIT(2),
+    CY_FILE_MODE_READ_WRITE = CY_BIT(3),
+
+    CY__FILE_MODE_MODES =  CY_FILE_MODE_READ | CY_FILE_MODE_WRITE |
+        CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE
+} CyFileMode;
+
+typedef enum {
+    CY_SEEK_WHENCE_BEGIN,
+    CY_SEEK_WHENCE_CURRENT,
+    CY_SEEK_WHENCE_END,
+} CySeekWhenceType;
+
+// TODO(cya): maybe change some of these names later
+typedef enum {
+    CY_FILE_ERROR_OUT_OF_MEMORY = -1,
+    CY_FILE_ERROR_NONE,
+    CY_FILE_ERROR_INVALID,
+    CY_FILE_ERROR_INVALID_FILENAME,
+    CY_FILE_ERROR_EXISTS,
+    CY_FILE_ERROR_NOT_FOUND,
+    CY_FILE_ERROR_NO_PERMISSION,
+    CY_FILE_ERROR_TRUNCATION_FAILED,
+} CyFileError;
+
+typedef union {
+    void *p;
+    uintptr u;
+    intptr i;
+} CyFileDescriptor;
+
+typedef struct CyFileOps CyFileOps;
+
+#define CY_FILE_OPEN_PROC(name) CyFileError name( \
+    CyFileDescriptor *fd, CyFileOps *ops, \
+    CyFileMode mode, const char *filename \
+)
+#define CY_FILE_READ_AT_PROC(name) b32 name( \
+    CyFileDescriptor fd, void *buf, \
+    isize size, isize offset, isize *bytes_read \
+)
+#define CY_FILE_WRITE_AT_PROC(name) b32 name( \
+    CyFileDescriptor fd, const void *buf, \
+    isize size, isize offset, isize *bytes_written \
+)
+#define CY_FILE_SEEK_PROC(name) b32 name( \
+    CyFileDescriptor fd, isize offset, \
+    CySeekWhenceType whence, isize *new_offset \
+)
+#define CY_FILE_CLOSE_PROC(name) void name(CyFileDescriptor fd)
+
+typedef CY_FILE_OPEN_PROC(CyFileOpenProc);
+typedef CY_FILE_READ_AT_PROC(CyFileReadAtProc);
+typedef CY_FILE_WRITE_AT_PROC(CyFileWriteAtProc);
+typedef CY_FILE_SEEK_PROC(CyFileSeekProc);
+typedef CY_FILE_CLOSE_PROC(CyFileCloseProc);
+
+struct CyFileOps {
+    CyFileReadAtProc *read_at;
+    CyFileWriteAtProc *write_at;
+    CyFileSeekProc *seek;
+    CyFileCloseProc *close;
+};
+
+extern const CyFileOps cy__default_file_ops;
+
+typedef u64 CyFileTime;
+
+typedef struct {
+    CyFileOps ops;
+    CyFileDescriptor fd;
+    const char *filename;
+    CyFileTime last_write_time;
+} CyFile;
+
+// TODO(cya): async file and dir info (?)
+
+typedef enum {
+    CY_FILE_STD_IN,
+    CY_FILE_STD_OUT,
+    CY_FILE_STD_ERR,
+    CY__FILE_STD_COUNT
+} CyFileStdType;
+
+CY_DEF CyFile *cy_file_get_std_handle(CyFileStdType type);
+
+// TODO(cya): temp file proc (?)
+
+CY_DEF CyFileError cy_file_create(CyFile *f, const char *filename);
+CY_DEF CyFileError cy_file_open(CyFile *f, const char *filename);
+CY_DEF CyFileError cy_file_open_with_mode(
+    CyFile *f, CyFileMode mode, const char *filename
+);
+CY_DEF CyFileError cy_file_new(
+    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
+);
+CY_DEF CyFileError cy_file_close(CyFile *f);
+CY_DEF CyFileError cy_file_truncate(CyFile *f, isize size);
+
+CY_DEF b32 cy_file_read_at_report(
+    CyFile *f, void *buf,
+    isize size, isize offset, isize *bytes_read
+);
+CY_DEF b32 cy_file_write_at_report(
+    CyFile *f, const void *buf,
+    isize size, isize offset, isize *bytes_written
+);
+CY_DEF b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset);
+CY_DEF b32 cy_file_write_at(
+    CyFile *f, const void *buf, isize size, isize offset
+);
+CY_DEF b32 cy_file_read(CyFile *f, void *buf, isize size);
+CY_DEF b32 cy_file_write(CyFile *f, const void *buf, isize size);
+
+CY_DEF isize cy_file_seek(CyFile *f, isize offset);
+CY_DEF isize cy_file_seek_to_end(CyFile *f);
+CY_DEF isize cy_file_skip(CyFile *f, isize bytes);
+CY_DEF isize cy_file_tell(CyFile *f);
+
+CY_DEF isize cy_file_size(CyFile *f);
+CY_DEF const char *cy_file_name(CyFile *f);
+CY_DEF b32 cy_file_has_changed(CyFile *f);
+
+
+CY_DEF b32 cy_file_path_exists(const char *filename);
+CY_DEF CyFileTime cy_file_path_last_write_time(const char *filename);
+CY_DEF CyFileTime cy_file_path_copy(
+    const char *cur_filename, const char *new_filename, b32 fail_if_exists
+);
+CY_DEF CyFileTime cy_file_path_move(
+    const char *cur_filename, const char *new_filename
+);
+CY_DEF CyFileTime cy_file_path_remove(const char *filename);
+
+#if defined(CY_OS_WINDOWS)
+    #define CY_PATH_SEPARATOR '\\'
+#else
+    #define CY_PATH_SEPARATOR '/'
+#endif
+
+CY_DEF b32 cy_path_is_absolute(const char *path);
+CY_DEF b32 cy_path_is_relative(const char *path);
+CY_DEF b32 cy_path_is_root(const char *path);
+
+CY_DEF const char *cy_path_base_name(const char *path);
+CY_DEF const char *cy_path_extension(const char *path);
+
+CY_DEF CyString cy_path_full_version(const char *path);
+
+/* =================================== I/O ================================== */
+CY_DEF isize cy_printf(const char *fmt, ...) CY__FMT_ATTR(1);
+CY_DEF isize cy_printf_err(const char *fmt, ...) CY__FMT_ATTR(1);
+
+CY_DEF isize cy_printf_va(const char *fmt, va_list va);
+CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
+
+CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__FMT_ATTR(2);
+CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
+
+CY_DEF isize cy_sprintf(
+    char *buf, isize size, const char *fmt, ...
+) CY__FMT_ATTR(3);
+CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
+
+CY_DEF char *cy_asprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
+CY_DEF char *cy_asprintf_va(CyAllocator a, const char *fmt, va_list va);
+
 /* =============================== Allocators =============================== */
 typedef enum {
     CY_ALLOCATION_ALLOC,
@@ -300,10 +476,10 @@ typedef enum {
 
 typedef CY_ALLOCATOR_PROC(CyAllocatorProc);
 
-typedef struct {
+struct CyAllocator {
     CyAllocatorProc *proc;
     void *data;
-} CyAllocator;
+};
 
 #define CY_DEFAULT_ALIGNMENT (2 * sizeof(void*))
 #define CY_DEFAULT_ALLOCATOR_FLAGS (CY_ALLOCATOR_CLEAR_TO_ZERO)
@@ -534,8 +710,6 @@ CY_DEF isize cy_str_parse_f32(f32 n, char *dst);
 CY_DEF isize cy_str_parse_f64(f64 n, char *dst);
 
 /* ======================= Strings (and StringViews) ======================== */
-typedef char *CyString;
-
 typedef struct {
     CyAllocator alloc;
     isize len;
@@ -544,10 +718,10 @@ typedef struct {
 
 #define CY_STRING_HEADER(str) ((CyStringHeader*)(str) - 1)
 
-typedef struct {
+struct CyStringView {
     const u8 *text;
     isize len;
-} CyStringView;
+};
 
 CY_DEF isize cy_string_len(CyString str);
 CY_DEF isize cy_string_cap(CyString str);
@@ -573,7 +747,7 @@ CY_DEF CyString cy_string_append_c(CyString str, const char *other);
 CY_DEF CyString cy_string_append_rune(CyString str, Rune r);
 CY_DEF CyString cy_string_append_fmt(
     CyString str, const char *fmt, ...
-) CY__PRINTF_ATTR(2);
+) CY__FMT_ATTR(2);
 CY_DEF CyString cy_string_append_view(CyString str, CyStringView view);
 CY_DEF CyString cy_string_prepend_len(
     CyString str, const char *other, isize len
@@ -583,7 +757,7 @@ CY_DEF CyString cy_string_prepend_c(CyString str, const char *other);
 CY_DEF CyString cy_string_prepend_rune(CyString str, Rune r);
 CY_DEF CyString cy_string_prepend_fmt(
     CyString str, const char *fmt, ...
-) CY__PRINTF_ATTR(2);
+) CY__FMT_ATTR(2);
 CY_DEF CyString cy_string_prepend_view(CyString str, CyStringView view);
 CY_DEF CyString cy_string_pred_right(CyString str, isize width, Rune r);
 CY_DEF CyString cy_string_set(CyString str, const char *c_str);
@@ -677,181 +851,11 @@ CY_DEF b32 cy_string_16_view_contains(
 /* ============================ Unicode helpers ============================= */
 CY_DEF isize cy_utf8_codepoints(const char *str);
 
-/* ================================== Files ================================= */
-typedef enum {
-    CY_FILE_MODE_READ = CY_BIT(0),
-    CY_FILE_MODE_WRITE = CY_BIT(1),
-    CY_FILE_MODE_APPEND = CY_BIT(2),
-    CY_FILE_MODE_READ_WRITE = CY_BIT(3),
-
-    CY__FILE_MODE_MODES =  CY_FILE_MODE_READ | CY_FILE_MODE_WRITE |
-        CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE
-} CyFileMode;
-
-typedef enum {
-    CY_SEEK_WHENCE_BEGIN,
-    CY_SEEK_WHENCE_CURRENT,
-    CY_SEEK_WHENCE_END,
-} CySeekWhenceType;
-
-// TODO(cya): maybe change some of these names later
-typedef enum {
-    CY_FILE_ERROR_OUT_OF_MEMORY = -1,
-    CY_FILE_ERROR_NONE,
-    CY_FILE_ERROR_INVALID,
-    CY_FILE_ERROR_INVALID_FILENAME,
-    CY_FILE_ERROR_EXISTS,
-    CY_FILE_ERROR_NOT_FOUND,
-    CY_FILE_ERROR_NO_PERMISSION,
-    CY_FILE_ERROR_TRUNCATION_FAILED,
-} CyFileError;
-
-typedef union {
-    void *p;
-    uintptr u;
-    intptr i;
-} CyFileDescriptor;
-
-typedef struct CyFileOps CyFileOps;
-
-#define CY_FILE_OPEN_PROC(name) CyFileError name( \
-    CyFileDescriptor *fd, CyFileOps *ops, \
-    CyFileMode mode, const char *filename \
-)
-#define CY_FILE_READ_AT_PROC(name) b32 name( \
-    CyFileDescriptor fd, void *buf, \
-    isize size, isize offset, isize *bytes_read \
-)
-#define CY_FILE_WRITE_AT_PROC(name) b32 name( \
-    CyFileDescriptor fd, const void *buf, \
-    isize size, isize offset, isize *bytes_written \
-)
-#define CY_FILE_SEEK_PROC(name) b32 name( \
-    CyFileDescriptor fd, isize offset, \
-    CySeekWhenceType whence, isize *new_offset \
-)
-#define CY_FILE_CLOSE_PROC(name) void name(CyFileDescriptor fd)
-
-typedef CY_FILE_OPEN_PROC(CyFileOpenProc);
-typedef CY_FILE_READ_AT_PROC(CyFileReadAtProc);
-typedef CY_FILE_WRITE_AT_PROC(CyFileWriteAtProc);
-typedef CY_FILE_SEEK_PROC(CyFileSeekProc);
-typedef CY_FILE_CLOSE_PROC(CyFileCloseProc);
-
-struct CyFileOps {
-    CyFileReadAtProc *read_at;
-    CyFileWriteAtProc *write_at;
-    CyFileSeekProc *seek;
-    CyFileCloseProc *close;
-};
-
-extern const CyFileOps cy__default_file_ops;
-
-typedef u64 CyFileTime;
-
-typedef struct {
-    CyFileOps ops;
-    CyFileDescriptor fd;
-    const char *filename;
-    CyFileTime last_write_time;
-} CyFile;
-
-// TODO(cya): async file and dir info (?)
-
-typedef enum {
-    CY_FILE_STD_IN,
-    CY_FILE_STD_OUT,
-    CY_FILE_STD_ERR,
-    CY__FILE_STD_COUNT
-} CyFileStdType;
-
-CY_DEF CyFile *cy_file_get_std_handle(CyFileStdType type);
-
-// TODO(cya): temp file proc (?)
-
-CY_DEF CyFileError cy_file_create(CyFile *f, const char *filename);
-CY_DEF CyFileError cy_file_open(CyFile *f, const char *filename);
-CY_DEF CyFileError cy_file_open_with_mode(
-    CyFile *f, CyFileMode mode, const char *filename
-);
-CY_DEF CyFileError cy_file_new(
-    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
-);
-CY_DEF CyFileError cy_file_close(CyFile *f);
-CY_DEF CyFileError cy_file_truncate(CyFile *f, isize size);
-
-CY_DEF b32 cy_file_read_at_report(
-    CyFile *f, void *buf,
-    isize size, isize offset, isize *bytes_read
-);
-CY_DEF b32 cy_file_write_at_report(
-    CyFile *f, const void *buf,
-    isize size, isize offset, isize *bytes_written
-);
-CY_DEF b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset);
-CY_DEF b32 cy_file_write_at(
-    CyFile *f, const void *buf, isize size, isize offset
-);
-CY_DEF b32 cy_file_read(CyFile *f, void *buf, isize size);
-CY_DEF b32 cy_file_write(CyFile *f, const void *buf, isize size);
-
-CY_DEF isize cy_file_seek(CyFile *f, isize offset);
-CY_DEF isize cy_file_seek_to_end(CyFile *f);
-CY_DEF isize cy_file_skip(CyFile *f, isize bytes);
-CY_DEF isize cy_file_tell(CyFile *f);
-
-CY_DEF isize cy_file_size(CyFile *f);
-CY_DEF const char *cy_file_name(CyFile *f);
-CY_DEF b32 cy_file_has_changed(CyFile *f);
-
-
-CY_DEF b32 cy_file_path_exists(const char *filename);
-CY_DEF CyFileTime cy_file_path_last_write_time(const char *filename);
-CY_DEF CyFileTime cy_file_path_copy(
-    const char *cur_filename, const char *new_filename, b32 fail_if_exists
-);
-CY_DEF CyFileTime cy_file_path_move(
-    const char *cur_filename, const char *new_filename
-);
-CY_DEF CyFileTime cy_file_path_remove(const char *filename);
-
-#if defined(CY_OS_WINDOWS)
-    #define CY_PATH_SEPARATOR '\\'
-#else
-    #define CY_PATH_SEPARATOR '/'
-#endif
-
-CY_DEF b32 cy_path_is_absolute(const char *path);
-CY_DEF b32 cy_path_is_relative(const char *path);
-CY_DEF b32 cy_path_is_root(const char *path);
-
-CY_DEF const char *cy_path_base_name(const char *path);
-CY_DEF const char *cy_path_extension(const char *path);
-
-CY_DEF CyString cy_path_full_version(const char *path);
-
-/* =================================== I/O ================================== */
-// TODO(cya): add gcc/clang type warning builtins
-CY_DEF isize cy_printf(const char *fmt, ...) CY__PRINTF_ATTR(1);
-CY_DEF isize cy_printf_err(const char *fmt, ...) CY__PRINTF_ATTR(1);
-
-CY_DEF isize cy_printf_va(const char *fmt, va_list va);
-CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
-
-CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__PRINTF_ATTR(2);
-CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
-
-CY_DEF isize cy_sprintf(
-    char *buf, isize size, const char *fmt, ...
-) CY__PRINTF_ATTR(3);
-CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
-
 /******************************************************************************
  *                               IMPLEMENTATION                               *
  ******************************************************************************/
 #ifdef CY_IMPLEMENTATION
 /* ================================= Runtime ================================ */
-
 void cy_handle_assertion(
     const char *prefix,
     const char *cond,
@@ -985,6 +989,508 @@ inline f64 cy_ticks_to_time_unit(CyTicks ticks, CyTimeUnit unit)
 #endif
 }
 
+/* ================================== Files ================================= */
+// TODO(cya): maybe don't do this (?)
+cy_global CyFile cy__std_files[CY__FILE_STD_COUNT];
+cy_global b32 cy__std_files_set;
+
+#if defined(CY_OS_WINDOWS)
+cy_internal CyFileReadAtProc cy__win32_file_read;
+cy_internal CyFileWriteAtProc cy__win32_file_write;
+cy_internal CyFileSeekProc cy__win32_file_seek;
+cy_internal CyFileCloseProc cy__win32_file_close;
+
+const CyFileOps cy__default_file_ops = {
+    cy__win32_file_read,
+    cy__win32_file_write,
+    cy__win32_file_seek,
+    cy__win32_file_close,
+};
+
+cy_internal CyString16 cy__win32_utf8_to_utf16(CyAllocator a, const char *str)
+{
+    CY_VALIDATE_PTR(str);
+
+    isize len = cy_str_len(str);
+    isize size_utf16 = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len + 1,
+        NULL, 0
+    );
+    isize len_utf16 = size_utf16 - 1;
+    CyString16 str_utf16 = cy_string_16_create_reserve(a, size_utf16);
+    CY_VALIDATE_PTR(str_utf16);
+
+    isize res = MultiByteToWideChar(
+        CP_UTF8, 0,
+        str, len + 1,
+        str_utf16, size_utf16 + 1
+    );
+    if (res == 0) {
+        cy_string_16_free(str_utf16);
+        return NULL;
+    }
+
+    cy__string_16_set_len(str_utf16, len_utf16);
+    return str_utf16;
+}
+
+cy_internal CY_FILE_OPEN_PROC(cy__win32_file_open)
+{
+    if (filename == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    DWORD desired_access, creation_disposition;
+    switch (mode & CY__FILE_MODE_MODES) {
+    case CY_FILE_MODE_READ: {
+        desired_access = GENERIC_READ;
+        creation_disposition = OPEN_EXISTING;
+    } break;
+    case CY_FILE_MODE_WRITE: {
+        desired_access = GENERIC_WRITE;
+        creation_disposition = CREATE_ALWAYS;
+    } break;
+    case CY_FILE_MODE_APPEND: {
+        desired_access = GENERIC_WRITE;
+        creation_disposition = OPEN_ALWAYS;
+    } break;
+    case CY_FILE_MODE_READ | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = OPEN_EXISTING;
+    } break;
+    case CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = CREATE_ALWAYS;
+    } break;
+    case CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE: {
+        desired_access = GENERIC_READ | GENERIC_WRITE;
+        creation_disposition = OPEN_ALWAYS;
+    } break;
+    default: {
+        // TODO(cya): panic
+        return CY_FILE_ERROR_INVALID;
+    } break;
+    }
+
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    DWORD file_share_mode = FILE_SHARE_READ | FILE_SHARE_DELETE;
+    HANDLE handle = CreateFileW(
+        filename_16,desired_access, file_share_mode, NULL,
+        creation_disposition, FILE_ATTRIBUTE_NORMAL, NULL
+    );
+
+    cy_free(a, filename_16);
+    if (handle == INVALID_HANDLE_VALUE) {
+        switch (GetLastError()) {
+        case ERROR_FILE_NOT_FOUND: {
+            return CY_FILE_ERROR_NOT_FOUND;
+        } break;
+        case ERROR_FILE_EXISTS:
+        case ERROR_ALREADY_EXISTS: {
+            return CY_FILE_ERROR_EXISTS;
+        } break;
+        case ERROR_ACCESS_DENIED: {
+            return CY_FILE_ERROR_NO_PERMISSION;
+        } break;
+        default: {
+            return CY_FILE_ERROR_INVALID;
+        } break;
+        }
+    }
+
+    if (mode & CY_FILE_MODE_APPEND) {
+        LARGE_INTEGER ofs = {0};
+        if (!SetFilePointerEx(handle, ofs, NULL, FILE_END)) {
+            CloseHandle(handle);
+            return CY_FILE_ERROR_INVALID;
+        }
+    }
+
+    fd->p = handle;
+    *ops = cy__default_file_ops;
+
+    return CY_FILE_ERROR_NONE;
+}
+
+cy_internal CY_FILE_READ_AT_PROC(cy__win32_file_read)
+{
+    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
+    DWORD _bytes_read;
+    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
+    if (ReadFile(fd.p, buf, truncated_size, &_bytes_read, NULL)) {
+        if (bytes_read != NULL) {
+            *bytes_read = _bytes_read;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+cy_internal CY_FILE_WRITE_AT_PROC(cy__win32_file_write)
+{
+    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
+    DWORD _bytes_written;
+    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
+    if (WriteFile(fd.p, buf, truncated_size, &_bytes_written, NULL)) {
+        if (bytes_written != NULL) {
+            *bytes_written = _bytes_written;
+        }
+
+        return true;
+    }
+
+    return false;
+}
+
+cy_internal CY_FILE_SEEK_PROC(cy__win32_file_seek)
+{
+    LARGE_INTEGER li_offset = {.QuadPart = offset};
+    if (!SetFilePointerEx(fd.p, li_offset, &li_offset, whence)) {
+        return false;
+    }
+
+    if (new_offset != NULL) {
+        *new_offset = li_offset.QuadPart;
+    }
+
+    return true;
+}
+
+cy_internal CY_FILE_CLOSE_PROC(cy__win32_file_close)
+{
+    CloseHandle(fd.p);
+}
+
+CyFile *cy_file_get_std_handle(CyFileStdType type)
+{
+    if (!cy__std_files_set) {
+#define CY__SET_STD_FILE(type, val) { \
+    cy__std_files[type].fd.p = val; \
+    cy__std_files[type].ops = cy__default_file_ops; \
+} CY_NOOP()
+        CY__SET_STD_FILE(CY_FILE_STD_IN, GetStdHandle(STD_INPUT_HANDLE));
+        CY__SET_STD_FILE(CY_FILE_STD_OUT, GetStdHandle(STD_OUTPUT_HANDLE));
+        CY__SET_STD_FILE(CY_FILE_STD_ERR, GetStdHandle(STD_ERROR_HANDLE));
+#undef CY__SET_STD_FILE
+
+        cy__std_files_set = true;
+    }
+
+    return &cy__std_files[type];
+}
+
+#else // POSIX files
+//  TODO(cya): implement
+#endif
+
+inline CyFileError cy_file_create(CyFile *f, const char *filename)
+{
+    return cy_file_open_with_mode(
+        f, CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE, filename
+    );
+}
+
+inline CyFileError cy_file_open(CyFile *f, const char *filename)
+{
+    return cy_file_open_with_mode(f, CY_FILE_MODE_READ, filename);
+}
+
+CyFileError cy_file_open_with_mode(
+    CyFile *f, CyFileMode mode, const char *filename
+) {
+    CyFileError err =
+#if defined(CY_OS_WINDOWS)
+        cy__win32_file_open(&f->fd, &f->ops, mode, filename);
+#else
+        cy__posix_file_open(&f->fd, &f->ops, mode, filename);
+#endif
+
+    return err != CY_FILE_ERROR_NONE ?
+        err : cy_file_new(f, f->fd, f->ops, filename);
+}
+
+inline CyFileError cy_file_new(
+    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
+) {
+    isize len = cy_str_len(filename);
+    // TODO(cya): maybe filename should be a CyString
+    *f = (CyFile){
+        .ops = ops,
+        .fd = fd,
+        .filename = cy_alloc_copy(cy_heap_allocator(), filename, len + 1),
+        .last_write_time = cy_file_path_last_write_time(filename),
+    };
+    if (f->filename == NULL) {
+        return CY_FILE_ERROR_OUT_OF_MEMORY;
+    }
+
+    return CY_FILE_ERROR_NONE;
+}
+
+inline CyFileError cy_file_close(CyFile *f)
+{
+    if (f == NULL) {
+        return CY_FILE_ERROR_INVALID;
+    } else if (f->filename != NULL) {
+        cy_free(cy_heap_allocator(), (void*)f->filename);
+    }
+
+    b32 invalid =
+#if defined(CY_OS_WINDOWS)
+        (f->fd.p == INVALID_HANDLE_VALUE);
+#else
+        (f->fd.i < 0);
+#endif
+    if (invalid) {
+        return CY_FILE_ERROR_INVALID;
+    }
+
+    if (f->ops.read_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.close(f->fd);
+    return CY_FILE_ERROR_NONE;
+}
+
+#if defined(CY_OS_WINDOWS)
+inline CyFileError cy_file_truncate(CyFile *f, isize size)
+{
+    CyFileError err = CY_FILE_ERROR_NONE;
+
+    isize prev_offset = cy_file_tell(f);
+    cy_file_seek(f, size);
+    if (!SetEndOfFile(f->fd.p)) {
+        err = CY_FILE_ERROR_TRUNCATION_FAILED;
+    }
+
+    cy_file_seek(f, prev_offset);
+    return err;
+}
+#else
+
+#endif
+
+inline b32 cy_file_read_at_report(
+    CyFile *f, void *buf,
+    isize size, isize offset, isize *bytes_read
+) {
+    if (f->ops.read_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    return f->ops.read_at(f->fd, buf, size, offset, bytes_read);
+}
+
+inline b32 cy_file_write_at_report(
+    CyFile *f, const void *buf,
+    isize size, isize offset, isize *bytes_written
+) {
+    if (f->ops.write_at == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    return f->ops.write_at(f->fd, buf, size, offset, bytes_written);
+}
+
+inline b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset)
+{
+    return cy_file_read_at_report(f, buf, size, offset, NULL);
+}
+
+inline b32 cy_file_write_at(
+    CyFile *f, const void *buf, isize size, isize offset
+) {
+    return cy_file_write_at_report(f, buf, size, offset, NULL);
+}
+
+inline b32 cy_file_read(CyFile *f, void *buf, isize size)
+{
+    return cy_file_read_at(f, buf, size, cy_file_tell(f));
+}
+
+inline b32 cy_file_write(CyFile *f, const void *buf, isize size)
+{
+    return cy_file_write_at(f, buf, size, cy_file_tell(f));
+}
+
+inline isize cy_file_seek(CyFile *f, isize offset)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, offset, CY_SEEK_WHENCE_BEGIN, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_seek_to_end(CyFile *f)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_END, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_skip(CyFile *f, isize bytes)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, bytes, CY_SEEK_WHENCE_CURRENT, &new_offset);
+    return new_offset;
+}
+
+inline isize cy_file_tell(CyFile *f)
+{
+    isize new_offset = 0;
+    if (f->ops.seek == NULL) {
+        f->ops = cy__default_file_ops;
+    }
+
+    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_CURRENT, &new_offset);
+    return new_offset;
+}
+
+#if defined(CY_OS_WINDOWS)
+inline isize cy_file_size(CyFile *f)
+{
+    LARGE_INTEGER size;
+    GetFileSizeEx(f->fd.p, &size);
+    return (isize)size.QuadPart;
+}
+
+inline const char *cy_file_name(CyFile *f)
+{
+    return f->filename == NULL ? "" : f->filename;
+}
+
+inline b32 cy_file_has_changed(CyFile *f)
+{
+    CyFileTime last_write_time = cy_file_path_last_write_time(f->filename);
+    b32 changed = (f->last_write_time != last_write_time);
+    if (changed) {
+        f->last_write_time = last_write_time;
+    }
+
+    return changed;
+}
+
+b32 cy_file_path_exists(const char *filename)
+{
+    WIN32_FIND_DATAW data;
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return false;
+    }
+
+    HANDLE handle = FindFirstFileW(filename_16, &data);
+    cy_string_16_free(filename_16);
+
+    b32 found = (handle != INVALID_HANDLE_VALUE);
+    if (found) {
+        FindClose(handle);
+    }
+
+    return found;
+}
+
+CyFileTime cy_file_path_last_write_time(const char *filename)
+{
+    ULARGE_INTEGER li = {0};
+    FILETIME last_write_time = {0};
+    WIN32_FILE_ATTRIBUTE_DATA attr = {0};
+
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return 0;
+    }
+
+    if (GetFileAttributesExW(filename_16, GetFileExInfoStandard, &attr)) {
+        last_write_time = attr.ftLastWriteTime;
+    }
+
+    cy_string_16_free(filename_16);
+
+    li.LowPart = last_write_time.dwLowDateTime;
+    li.HighPart = last_write_time.dwHighDateTime;
+    return (CyFileTime)li.QuadPart;
+}
+
+CyFileTime cy_file_path_copy(
+    const char *cur_filename, const char *new_filename, b32 fail_if_exists
+) {
+    b32 res = false;
+    CyAllocator a = cy_heap_allocator();
+
+    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
+    if (cur_filename_16 == NULL) {
+        return false;
+    }
+
+    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
+    if (new_filename_16 != NULL) {
+        res = CopyFileW(cur_filename_16, new_filename_16, fail_if_exists);
+    }
+
+    cy_string_16_free(new_filename_16);
+    cy_string_16_free(cur_filename_16);
+    return res;
+}
+
+CyFileTime cy_file_path_move(const char *cur_filename, const char *new_filename)
+{
+    b32 res = false;
+    CyAllocator a = cy_heap_allocator();
+
+    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
+    if (cur_filename_16 == NULL) {
+        return false;
+    }
+
+    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
+    if (new_filename_16 != NULL) {
+        res = MoveFileW(cur_filename_16, new_filename_16);
+    }
+
+    cy_string_16_free(new_filename_16);
+    cy_string_16_free(cur_filename_16);
+    return res;
+}
+
+CyFileTime cy_file_path_remove(const char *filename)
+{
+    CyAllocator a = cy_heap_allocator();
+    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
+    if (filename_16 == NULL) {
+        return false;
+    }
+
+    b32 res = DeleteFileW(filename_16);
+    cy_string_16_free(filename_16);
+    return res;
+}
+
+#else // POSIX
+
+#endif
+
 /* =================================== I/O ================================== */
 inline isize cy_printf(const char *fmt, ...)
 {
@@ -1030,10 +1536,29 @@ inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
 
 inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
-    cy_persist char buf[CY__IO_INTERNAL_BUF_SIZE];
-    isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
+    cy_persist char static_buf[CY__IO_INTERNAL_BUF_SIZE];
+    isize static_size = CY_ARRAY_LEN(static_buf);
+    isize len = cy_sprintf_va(static_buf, static_size, fmt, va);
 
-    cy_file_write(f, buf, len);
+    char *src = static_buf;
+    b32 use_heap = (len >= static_size);
+    if (use_heap) {
+        isize heap_size = len + 1;
+        char *heap_buf = cy_alloc_array(cy_heap_allocator(), char, heap_size);
+        if (heap_buf != NULL) {
+            len = cy_sprintf_va(heap_buf, heap_size, fmt, va);
+            CY_ASSERT(len < heap_size);
+
+            src = heap_buf;
+        } else {
+            use_heap = false;
+        }
+    }
+
+    cy_file_write(f, src, len);
+    if (use_heap) {
+        cy_free(cy_heap_allocator(), src);
+    }
 
     return len;
 }
@@ -1165,6 +1690,10 @@ cy_global const char cy__num_to_char_table_lower[] = "0123456789abcdef";
 
 cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 {
+    const isize limit = cap - 1;
+    isize written = 0;
+    isize written_total = 0;
+
     i32 base = info->base;
     b32 style_alt = (info->flags & CY__FMT_HASH);
     b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
@@ -1172,76 +1701,99 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
 
-    isize remaining = cap;
     char *c = dst;
     if (n == 0) {
-        *c++ = '0';
-        remaining -= 1;
+        if (written < limit) {
+            *c++ = '0';
+            written += 1;
+        }
+
+        written_total += 1;
     } else {
-        while (n > 0 && remaining-- > 0) {
-            *c++ = table[n % base];
+        while (n > 0) {
+            if (written < limit) {
+                *c++ = table[n % base];
+                written += 1;
+            }
+
             n /= base;
+            written_total += 1;
         }
     }
 
     b32 use_precision = (info->precision != -1) &&
         (info->flags & CY__FMT_INTS);
     if (use_precision) {
-        isize cur_len = c - dst;
-        while (cur_len < info->precision && remaining > 0) {
-            *c++ = '0';
-            cur_len += 1, remaining -= 1;
+        while (written < info->precision) {
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         }
     }
 
-    isize len = c - dst;
-    b32 fill_with_zeros = !use_precision && (len < info->width) &&
+    b32 fill_with_zeros = !use_precision && (written < info->width) &&
         (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
     b32 print_sign = (info->flags & CY__FMT_PLUS) ||
         (info->flags & CY__FMT_SPACE);
     isize sign_len = !!print_sign;
-    if (fill_with_zeros && remaining > 0) {
-        isize extra = info->width - len - sign_len;
-        while (extra-- > 0 && remaining > 0) {
-            *c++ = '0';
-            len += 1, remaining -= 1;
+    if (fill_with_zeros) {
+        isize extra = info->width - written - sign_len;
+        while (extra-- > 0) {
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         }
     }
 
-    if (add_prefix && remaining > 0) {
+    if (add_prefix) {
         switch (base) {
         case 16: {
-            *c++ = cy_char_with_case('x', style_upper);
-            len += 1, remaining -= 1;
-            if (remaining < 1) {
-                break;
+            if (written < limit) {
+                *c++ = cy_char_with_case('x', style_upper);
+                written += 1;
             }
-        }
+
+            written_total += 1;
+        } // NOTE(cya): fallthrough
         case 8: {
-            *c++ = '0';
-            len += 1, remaining -= 1;
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         } break;
         }
     }
 
-    if (print_sign && remaining > 0) {
-        char sign = '-';
-        if (info->flags & CY__FMT_PLUS) {
-            sign = '+';
-        } else if (info->flags & CY__FMT_SPACE) {
-            sign = ' ';
+    if (print_sign) {
+        char sign = (info->flags & CY__FMT_SPACE) ? ' ' : '+';
+        if (written < limit) {
+            *c++ = sign;
+            written += 1;
         }
 
-        *c++ = sign;
-        len += 1, remaining -= 1;
+        written_total += 1;
     }
 
+    isize len = written;
     cy_str_reverse_n(dst, len);
-    return len;
+
+    return written_total;
 }
 
 cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
 {
+    const isize limit = cap - 1;
+    isize written = 0;
+    isize written_total = 0;
+
     i32 base = info->base;
     b32 style_alt = (info->flags & CY__FMT_HASH);
     b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
@@ -1255,16 +1807,25 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         n = -n;
     }
 
-    isize remaining = cap;
+    // isize remaining = cap;
     char *c = dst;
     u64 v = (u64)n;
     if (v == 0) {
-        *c++ = '0';
-        remaining -= 1;
+        if (written < limit) {
+            *c++ = '0';
+            written += 1;
+        }
+
+        written_total += 1;
     } else {
-        while (v > 0 && remaining-- > 0) {
-            *c++ = table[v % base];
+        while (v > 0) {
+            if (written < limit) {
+                *c++ = table[v % base];
+                written += 1;
+            }
+
             v /= base;
+            written_total += 1;
         }
     }
 
@@ -1272,43 +1833,55 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         (info->flags & CY__FMT_INTS);
     if (use_precision) {
         isize cur_len = c - dst;
-        while (cur_len < info->precision && remaining > 0) {
-            *c++ = '0';
-            cur_len += 1, remaining -= 1;
+        while (cur_len < info->precision) {
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         }
     }
 
-    isize len = c - dst;
-    b32 fill_with_zeros = !use_precision && (len < info->width) &&
+    b32 fill_with_zeros = !use_precision && (written < info->width) &&
         (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
     b32 print_sign = negative ||
         (info->flags & CY__FMT_PLUS) || (info->flags & CY__FMT_SPACE);
     isize sign_len = !!print_sign;
-    if (fill_with_zeros && remaining > 0) {
-        isize extra = info->width - len - sign_len;
-        while (extra-- > 0 && remaining > 0) {
-            *c++ = '0';
-            len += 1, remaining -= 1;
+    if (fill_with_zeros) {
+        isize extra = info->width - written - sign_len;
+        while (extra-- > 0) {
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         }
     }
 
-    if (add_prefix && remaining > 0) {
+    if (add_prefix) {
         switch (base) {
         case 16: {
-            *c++ = cy_char_with_case('x', style_upper);
-            len += 1, remaining -= 1;
-            if (remaining < 1) {
-                break;
+            if (written < limit) {
+                *c++ = cy_char_with_case('x', style_upper);
+                written += 1;
             }
-        }
+
+            written_total += 1;
+        } // NOTE(cya): fallthrough
         case 8: {
-            *c++ = '0';
-            len += 1, remaining -= 1;
+            if (written < limit) {
+                *c++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
         } break;
         }
     }
 
-    if (print_sign && remaining > 0) {
+    if (print_sign) {
         char sign = '-';
         if (info->flags & CY__FMT_PLUS) {
             sign = '+';
@@ -1316,32 +1889,49 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
             sign = ' ';
         }
 
-        *c++ = sign;
-        len += 1, remaining -= 1;
+        if (written < limit) {
+            *c++ = sign;
+            written += 1;
+        }
+
+        written_total += 1;
     }
 
+    isize len = written;
     cy_str_reverse_n(dst, len);
-    return len;
+
+    return written_total;
 }
 
-cy_internal isize cy__print_str(
+cy_internal inline isize cy__print_str(
     char *dst, isize cap, CyFmtInfo *info, const char *src
 ) {
+    const isize limit = cap - 1;
+    isize written = 0;
+    isize written_total = 0;
+
     i32 precision = info->precision;
-    char *start = dst;
     if (precision > 0) {
-        while (*src && precision > 0 && cap > 0) {
-            *dst++ = *src++;
-            cap -= 1, precision -= 1;
+        while (*src != '\0' && precision > 0) {
+            if (written < limit) {
+                *dst++ = *src++;
+                written += 1;
+            }
+
+            written_total += 1, precision -= 1;
         }
     } else {
-        while (*src && cap > 0) {
-            *dst++ = *src++;
-            cap -= 1;
+        while (*src != '\0') {
+            if (written < limit) {
+                *dst++ = *src++;
+                written += 1;
+            }
+
+            written_total += 1;
         }
     }
 
-    return dst - start;
+    return written_total;
 }
 
 // NOTE(cya): binary exponentiation for floats
@@ -1385,25 +1975,39 @@ cy_global f64 cy__pow_of_16_table[] = {
 
 cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 {
-    CY_ASSERT(cap > 0);
+    const isize limit = cap - 1;
+    isize written = 0;
+    isize written_total = 0;
 
     b32 upper = info->flags & CY__FMT_STYLE_UPPER;
-    isize remaining = cap;
+    // isize remaining = cap;
     char *cur = dst;
     if (CY_IS_NAN(n)) {
         return cy__print_str(cur, cap, info, upper ? "NAN" : "nan");
     }
 
     if (n < 0.0) {
-        *cur++ = '-';
-        remaining -= 1;
         n = -n;
+        if (written < limit) {
+            *cur++ = '-';
+            written += 1;
+        }
+
+        written_total += 1;
     } else if (info->flags & CY__FMT_PLUS) {
-        *cur++ = '+';
-        remaining -= 1;
+        if (written < limit) {
+            *cur++ = '+';
+            written += 1;
+        }
+
+        written_total += 1;
     } else if (info->flags & CY__FMT_SPACE) {
-        *cur++ = ' ';
-        remaining -= 1;
+        if (written < limit) {
+            *cur++ = ' ';
+            written += 1;
+        }
+
+        written_total += 1;
     }
 
     if (CY_IS_INF(n)) {
@@ -1416,7 +2020,11 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 style_alt = info->flags & CY__FMT_HASH;
 
     if (style_hex) {
-        cur += cy__print_str(cur, cap, info, upper ? "0X" : "0x");
+        isize len_total = cy__print_str(cur, cap, info, upper ? "0X" : "0x");
+        isize len = CY_MIN(len_total, cap);
+
+        cur += len, written += len;
+        written_total += len_total;
     }
 
     char *num_start = cur;
@@ -1462,10 +2070,14 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 
     u64 integral = (u64)n;
     isize integral_len, len;
-    len = integral_len = cy__print_u64(cur, remaining, &(CyFmtInfo){
+    isize remaining = limit - written;
+    isize len_total = integral_len = cy__print_u64(cur, remaining, &(CyFmtInfo){
         .base = info->base,
     }, integral);
-    cur += len, remaining -= len;
+
+    len = integral_len = CY_MIN(len_total, remaining);
+    cur += len, written += len;
+    written_total += len_total;
 
     // NOTE(cya): because 'significant digits' includes integral part
     if (style_auto) {
@@ -1502,18 +2114,26 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 print_decimal = precision > 0 &&
         !(style_auto && !style_alt && decimal == 0);
     b32 print_dot = print_decimal || style_alt;
-    if (print_dot && remaining > 0) {
-        *cur++ = '.';
-        remaining -= 1;
+    if (print_dot) {
+        if (written < limit) {
+            *cur++ = '.';
+            written += 1;
+        }
+
+        written_total += 1;
     }
 
-    if (print_decimal && remaining > 0) {
+    if (print_decimal) {
         char *c = cur;
         if (!style_auto || style_alt) {
             i32 extra_digits = info->precision - precision;
-            while (extra_digits > 0 && remaining > 0) {
-                *c++ = '0';
-                extra_digits -= 1, remaining -= 1;
+            while (extra_digits-- > 0) {
+                if (written < limit) {
+                    *c++ = '0';
+                    written += 1;
+                }
+
+                written_total += 1;
             }
         } else {
             while (decimal % info->base == 0) {
@@ -1524,109 +2144,132 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 
         const char *table = upper ?
             cy__num_to_char_table_upper : cy__num_to_char_table_lower;
-        while (precision-- > 0 && remaining > 0) {
-            *c++ = table[decimal % info->base];
+        while (precision-- > 0) {
+            if (written < limit) {
+                *c++ = table[decimal % info->base];
+                written += 1;
+            }
+
             decimal /= info->base;
-            remaining -= 1;
+            written_total += 1;
         }
 
         len = c - cur;
         cy_str_reverse_n(cur, len);
-
-        cur += len, remaining -= len;
+        cur += len;
     }
 
     b32 print_exponent = swap &&
-        (style_exp || style_hex || (exponent != 0 && remaining > 1));
+        (style_exp || style_hex || (exponent != 0));
     if (print_exponent) {
         char c = style_hex ? 'p' : 'e';
         c = cy_char_with_case(c, upper);
-
-        *cur++ = c;
-        remaining -= 1;
-
-        c = (exponent < 0) ? '-' : '+';
-        *cur++ = c;
-        remaining -= 1;
-
-        exponent = CY_ABS(exponent);
-        if (!style_hex && exponent < 10) {
-            *cur++ = '0';
-            remaining -= 1;
+        if (written < limit) {
+            *cur++ = c;
+            written += 1;
         }
 
-        len = cy__print_i64(cur, remaining, &(CyFmtInfo){
+        written_total += 1;
+        c = (exponent < 0) ? '-' : '+';
+        if (written < limit) {
+            *cur++ = c;
+            written += 1;
+        }
+
+        written_total += 1;
+        exponent = CY_ABS(exponent);
+        if (!style_hex && exponent < 10) {
+            if (written < limit) {
+                *cur++ = '0';
+                written += 1;
+            }
+
+            written_total += 1;
+        }
+
+        remaining = limit - written;
+        len_total = cy__print_i64(cur, remaining, &(CyFmtInfo){
             .base = 10,
         }, exponent);
-        cur += len, remaining -= len;
+
+        len = CY_MIN(len_total, remaining);
+        cur += len, written += len;
+        written_total += len_total;
     }
 
     len = cur - dst;
     b32 fill_with_zeros = !custom_precision && (len < info->width) &&
         (info->flags & CY__FMT_ZERO) && !(info->flags & CY__FMT_MINUS);
     if (fill_with_zeros) {
+        remaining = limit - written;
+
         isize prefix_len = num_start - dst;
-        isize extra = info->width - len;
-        if (remaining >= extra) {
-            cy_mem_move(num_start + extra, num_start, len - prefix_len);
-            cy_mem_set(num_start, '0', extra);
+        isize extra_total = info->width - len;
+        isize extra = CY_MIN(extra_total, remaining);
 
-            remaining -= extra;
-        }
+        cy_mem_move(num_start + extra, num_start, len - prefix_len);
+        cy_mem_set(num_start, '0', extra);
 
-        len += extra;
+        written += extra;
+        written_total += extra_total;
     }
 
-    return len;
+    return written_total;
 }
 
 // TODO(cya):
-// * write each conversion to a 4096-byte buffer before appending it to dst
-// * make the proc itself and every print_* proc calculate how many bytes
-//   it _would_ write into the array had it been large enough and just discard
-//   them in case the capacity is insufficient
 // * fix rounding errors on binary exponentiation
 // * implement extended format specifiers
-//     * %q for bools
-//     * %b for binary int
-//     * %sv for stringviews
+//   (seems like disabling warnings just for these is impossible)
+//   - %q for bools
+//   - %b* for binary int
+//   - %sv for stringviews
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
-    isize remaining = size - 1;
-
-#if 0
-    b32 write = remaining > 0;
-    isize ret = 0;
-#endif
+    // NOTE(cya): written_total is how much _would_ be written in case the buf
+    // wasn't large enough, while written is how much _was_ written which
+    // truncates if we reach the end of the buffer, that way we can report the
+    // amount of bytes necessary for this whole conversion to work and the user
+    // can allocate a suitable buffer and recall this procedure if necessary
+    // (all the cy__print_* subprocs use this pattern)
+    const isize limit = size - 1;
+    isize written_total = 0;
+    isize written = 0;
 
     char *end = buf;
     const char *f = fmt;
     for (;;) {
-        while (*f != '\0' && *f != '%' && remaining > 0) {
+        for (; *f != '\0' && *f != '%'; f++) {
+            char c = *f;
 #if defined(CY_OS_WINDOWS)
-            // NOTE(cya): CRLF conversion
-            if (*f == '\n') {
-                if (end - buf < 1 || *(end - 1) != '\r') {
-                    *end++ = *f++;
-                    remaining -= 1;
-                } else {
-                    *end++ = '\r';
-                    remaining -= 1;
-                }
+            // NOTE(cya): LF -> CRLF conversion
+            if (c == '\n') {
+                if (f - fmt < 1 || *(f - 1) != '\r') {
+                    if (written < limit) {
+                        *end++ = '\r';
+                        written += 1;
+                    }
 
-                continue;
+                    written_total += 1;
+                }
             }
 #endif
 
-            *end++ = *f++;
-            remaining -= 1;
+            if (written < limit) {
+                *end++ = c;
+                written += 1;
+            }
+
+            written_total += 1;
         }
 
-        if (*f++ == '\0' || remaining == 0) {
+        if (*f++ == '\0') {
             break;
         }
 
-        char *cur = end;
+        char conv_buf[CY__IO_INTERNAL_BUF_SIZE];
+        isize conv_cap = CY_ARRAY_LEN(conv_buf) - 1;
+
         CyFmtInfo info = {.precision = -1};
         b32 done = false;
         do {
@@ -1678,7 +2321,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             f += len;
         }
 
-        isize len = 1;
         switch (*f++) {
         case 'h': {
             if (*f == 'h') {
@@ -1713,6 +2355,8 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         } break;
         }
 
+        b32 out_arg = false;
+        isize conv_len = 0;
         switch (*f) {
         case 'd':
         case 'i': {
@@ -1770,45 +2414,86 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             if (info.flags & CY__FMT_LEN_LONG) {
                 // TODO(cya): convert from wcs to mbs (is it even worth it?)
             } else {
-                *end = (u8)va_arg(va, int);
+                *conv_buf = (u8)va_arg(va, int);
+                conv_len = 1;
             }
         } break;
         case 's': {
             if (info.flags & CY__FMT_LEN_LONG) {
                 // TODO(cya): same as the todo above
             } else {
-                len = cy__print_str(end, remaining, &info, va_arg(va, char*));
+                const char *src = va_arg(va, char*);
+                conv_len = cy__print_str(conv_buf, conv_cap, &info, src);
             }
         } break;
         case 'p': {
+            const char prefix[] = "0x";
+            char *end = cy_str_copy(conv_buf, prefix);
+
+            isize prefix_len = end - conv_buf;
+            isize cap = conv_cap - prefix_len;
+            conv_len += prefix_len;
+
             void *ptr = va_arg(va, void*);
-            len = cy__print_u64(end, remaining, &(CyFmtInfo){
+            conv_len += cy__print_u64(end, cap, &(CyFmtInfo){
                 .base = 16,
-                .flags = CY__FMT_ZERO,
+                .flags = (CY__FMT_ZERO | CY__FMT_STYLE_UPPER),
                 .width = 16,
             }, (u64)ptr);
         } break;
+#if 0
+        case 'q': {
+            b32 val = (b32)va_arg(va, int);
+            const char *str = val ? "true" : "false";
+            conv_len = cy__print_str(conv_buf, conv_cap, &info, str);
+        } break;
+#endif
         case 'n': {
-            len = 0;
-            int *out = va_arg(va, int*);
-            if (out != NULL) {
-                *out = (int)(end - buf);
-            }
+            out_arg = true;
         } break;
         case '%': {
-            *end = '%';
+            *conv_buf = '%';
+            conv_len = 1;
         } break;
         default: {
-            // TODO(cya): no fmt spec = stop writing at all or just ignore?
+            // TODO(cya): invalid fmt spec: print suitable error
             continue;
         } break;
         }
 
         f += 1;
-        if (remaining == 0) {
-            break;
-        } else if (info.base != 0) {
-            // NOTE(cya): print a number
+        if (out_arg) {
+            void *out = va_arg(va, void*);
+            if (out != NULL) {
+                isize val = written_total;
+                switch (info.flags & CY__FMT_LEN_MODS) {
+                case CY__FMT_LEN_CHAR: {
+                    *((i8*)out) = (i8)val;
+                } break;
+                case CY__FMT_LEN_SHORT: {
+                    *((i16*)out) = (i16)val;
+                } break;
+                case CY__FMT_LEN_LONG: {
+                    *((long*)out) = (long)val;
+                } break;
+                case CY__FMT_LEN_LONG_LONG: {
+                    *((long long*)out) = (long long)val;
+                } break;
+                case CY__FMT_LEN_INTMAX: {
+                    *((intmax_t*)out) = (intmax_t)val;
+                } break;
+                case CY__FMT_LEN_SIZE:
+                case CY__FMT_LEN_PTRDIFF: {
+                    *((isize*)out) = val;
+                } break;
+                default: {
+                    *((int*)out) = (int)val;
+                } break;
+                }
+            }
+
+            continue;
+        } else if (info.base != 0) { // NOTE(cya): print a number
             if (info.flags & CY__FMT_INTS) {
                 if (info.flags & CY__FMT_UNSIGNED) {
                     u64 val;
@@ -1828,18 +2513,16 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     case CY__FMT_LEN_INTMAX: {
                         val = (u64)va_arg(va, uintmax_t);
                     } break;
-                    case CY__FMT_LEN_SIZE: {
-                        val = (u64)va_arg(va, usize);
-                    } break;
+                    case CY__FMT_LEN_SIZE:
                     case CY__FMT_LEN_PTRDIFF: {
-                        val = (u64)va_arg(va, ptrdiff_t);
+                        val = (u64)va_arg(va, usize);
                     } break;
                     default: {
                         val = (u64)va_arg(va, unsigned);
                     } break;
                     }
 
-                    len = cy__print_u64(end, remaining, &info, val);
+                    conv_len = cy__print_u64(conv_buf, conv_cap, &info, val);
                 } else if (info.flags & CY__FMT_INT) {
                     i64 val;
                     switch (info.flags & CY__FMT_LEN_MODS) {
@@ -1858,49 +2541,97 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     case CY__FMT_LEN_INTMAX: {
                         val = (i64)va_arg(va, intmax_t);
                     } break;
-                    case CY__FMT_LEN_SIZE: {
-                        val = (i64)va_arg(va, isize);
-                    } break;
+                    case CY__FMT_LEN_SIZE:
                     case CY__FMT_LEN_PTRDIFF: {
-                        val = (i64)va_arg(va, ptrdiff_t);
+                        val = (i64)va_arg(va, isize);
                     } break;
                     default: {
                         val = (i64)va_arg(va, int);
                     } break;
                     }
 
-                    len = cy__print_i64(end, remaining, &info, val);
+                    conv_len = cy__print_i64(conv_buf, conv_cap, &info, val);
                 }
             } else if (info.flags & CY__FMT_FLOAT) {
                 f64 val = info.flags & CY__FMT_LEN_LONG_DOUBLE ?
                     (f64)va_arg(va, long double) : va_arg(va, f64);
-                len = cy__print_f64(end, remaining, &info, val);
+                conv_len = cy__print_f64(conv_buf, conv_cap, &info, val);
             }
         }
 
-        end += len, remaining -= len;
+        isize conv_len_total = conv_len;
+        conv_len = CY_MIN(conv_len, conv_cap);
 
+        // NOTE(cya): width padding
         b32 right_pad = info.flags & CY__FMT_MINUS;
         b32 fill_with_zeros = !right_pad && (info.flags & CY__FMT_ZERO);
-        if (!fill_with_zeros && len < info.width) {
-            isize extra = CY_MIN(info.width - len, remaining);
-            // if (remaining < extra) {
-            //     continue;
-            // }
+        if (!fill_with_zeros && conv_len < info.width) {
+            // NOTE(cya): truncating to remaining length
+            isize remaining = conv_cap - conv_len;
+            char *conv_end = conv_buf + conv_len;
 
+            isize extra = CY_MIN(info.width - conv_len, remaining);
             if (right_pad) {
-                cy_mem_set(end, ' ', extra);
+                cy_mem_set(conv_end, ' ', extra);
             } else { // NOTE(cya): npm
-                cy_mem_move(cur + extra, cur, len);
-                cy_mem_set(cur, ' ', extra);
+                cy_mem_move(conv_buf + extra, conv_buf, conv_len);
+                cy_mem_set(conv_buf, ' ', extra);
             }
 
-            end += extra, remaining -= extra;
+            isize extra_total = info.width - conv_len_total;
+            conv_len_total += extra_total;
+            conv_len += extra;
         }
+
+        if (written < limit) {
+            isize remaining = limit - written;
+            isize copy_len = CY_MIN(remaining, conv_len);
+
+            cy_mem_copy(end, conv_buf, copy_len);
+            end += copy_len;
+        }
+
+
+        written += conv_len;
+        written_total += conv_len_total;
     }
 
-    *end = '\0';
-    return end - buf;
+    if (end != NULL) {
+        *end = '\0';
+    }
+
+    return written_total;
+}
+
+inline char *cy_asprintf(CyAllocator a, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    char *res = cy_asprintf_va(a, fmt, va);
+    va_end(va);
+
+    return res;
+}
+
+inline char *cy_asprintf_va(CyAllocator a, const char *fmt, va_list va)
+{
+    isize init_size = 4096;
+    char *buf = cy_alloc(a, init_size);
+    isize len = cy_sprintf_va(buf, init_size, fmt, va);
+
+    isize new_size = len + 1;
+    char *new_buf = cy_resize(a, buf, init_size, new_size);
+    if (new_buf == NULL) {
+        cy_free(a, buf);
+        return NULL;
+    }
+
+    buf = new_buf;
+    if (new_size > init_size) {
+        cy_sprintf_va(buf, new_size, fmt, va);
+    }
+
+    return buf;
 }
 
 /* =============================== Allocators =============================== */
@@ -2047,8 +2778,6 @@ inline CyAllocator cy_heap_allocator(void)
     };
 }
 
-#include <malloc.h>
-
 #ifdef CY_OS_WINDOWS
     #define malloc_align(s, a) _aligned_malloc(s, a)
     #define realloc_align(alloc, mem, old_size, new_size, align) \
@@ -2083,9 +2812,6 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
     void *ptr = NULL;
     switch(type) {
     case CY_ALLOCATION_ALLOC: {
-#if 0
-        cy_printf_err("Allocated %zu bytes\n", size);
-#endif
         ptr = malloc_align(size, align);
         if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
             cy_mem_zero(ptr, size);
@@ -2101,8 +2827,7 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
     case CY_ALLOCATION_RESIZE: {
         void *new_ptr = realloc_align(
             cy_heap_allocator(), old_mem,
-            old_size, size,
-            align
+            old_size, size, align
         );
         CY_VALIDATE_PTR(new_ptr);
         ptr = new_ptr;
@@ -2957,6 +3682,8 @@ i64 cy_str_to_i64(const char *str, i32 base, isize *len_out)
     return res;
 }
 
+// TODO(cya): rework the parsing procedures
+
 isize cy_str_parse_u64(u64 n, i32 base, char *dst)
 {
     char *c = dst;
@@ -3377,12 +4104,14 @@ CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
     va_list va;
     va_start(va, fmt);
 
-    // TODO(cya): maybe have some fancier size handling than this?
-    char buf[0x1000] = {0};
-    isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
+    char *buf = cy_asprintf_va(a, fmt, va);
 
     va_end(va);
-    return cy_string_append_len(str, buf, len);
+    str = cy_string_append_c(str, buf);
+    cy_free(a, buf);
+
+    return str;
 }
 
 inline CyString cy_string_append_view(CyString str, CyStringView view)
@@ -3431,12 +4160,14 @@ inline CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...)
     va_list va;
     va_start(va, fmt);
 
-    // TODO(cya): maybe have some fancier size handling than this?
-    char buf[0x1000] = {0};
-    isize len = cy_sprintf_va(buf, CY_ARRAY_LEN(buf), fmt, va);
+    CyAllocator a = CY_STRING_HEADER(str)->alloc;
+    char *buf = cy_asprintf_va(a, fmt, va);
 
     va_end(va);
-    return cy_string_prepend_len(str, buf, len);
+    str = cy_string_prepend_c(str, buf);
+    cy_free(a, buf);
+
+    return str;
 }
 
 inline CyString cy_string_prepend_view(CyString str, CyStringView view)
@@ -3926,6 +4657,7 @@ b32 cy_string_16_view_contains(CyString16View str, const wchar_t *char_set)
 #endif // CY_OS_WINDOWS
 
 /* ============================ Unicode helpers ============================= */
+// TODO(cya): implement
 #if 0
 cy_global u8 cy__utf8_class_table[32] = {
     0, 0, 0, 0, // 0 = 0xxxx
@@ -3973,508 +4705,6 @@ inline isize cy_utf8_codepoints(const char *str)
 
     return count;
 }
-
-/* ================================== Files ================================= */
-// TODO(cya): maybe don't do this (?)
-cy_global CyFile cy__std_files[CY__FILE_STD_COUNT];
-cy_global b32 cy__std_files_set;
-
-#if defined(CY_OS_WINDOWS)
-cy_internal CyFileReadAtProc cy__win32_file_read;
-cy_internal CyFileWriteAtProc cy__win32_file_write;
-cy_internal CyFileSeekProc cy__win32_file_seek;
-cy_internal CyFileCloseProc cy__win32_file_close;
-
-const CyFileOps cy__default_file_ops = {
-    cy__win32_file_read,
-    cy__win32_file_write,
-    cy__win32_file_seek,
-    cy__win32_file_close,
-};
-
-cy_internal CyString16 cy__win32_utf8_to_utf16(CyAllocator a, const char *str)
-{
-    CY_VALIDATE_PTR(str);
-
-    isize len = cy_str_len(str);
-    isize size_utf16 = MultiByteToWideChar(
-        CP_UTF8, 0,
-        str, len + 1,
-        NULL, 0
-    );
-    isize len_utf16 = size_utf16 - 1;
-    CyString16 str_utf16 = cy_string_16_create_reserve(a, size_utf16);
-    CY_VALIDATE_PTR(str_utf16);
-
-    isize res = MultiByteToWideChar(
-        CP_UTF8, 0,
-        str, len + 1,
-        str_utf16, size_utf16 + 1
-    );
-    if (res == 0) {
-        cy_string_16_free(str_utf16);
-        return NULL;
-    }
-
-    cy__string_16_set_len(str_utf16, len_utf16);
-    return str_utf16;
-}
-
-cy_internal CY_FILE_OPEN_PROC(cy__win32_file_open)
-{
-    if (filename == NULL) {
-        return CY_FILE_ERROR_OUT_OF_MEMORY;
-    }
-
-    DWORD desired_access, creation_disposition;
-    switch (mode & CY__FILE_MODE_MODES) {
-    case CY_FILE_MODE_READ: {
-        desired_access = GENERIC_READ;
-        creation_disposition = OPEN_EXISTING;
-    } break;
-    case CY_FILE_MODE_WRITE: {
-        desired_access = GENERIC_WRITE;
-        creation_disposition = CREATE_ALWAYS;
-    } break;
-    case CY_FILE_MODE_APPEND: {
-        desired_access = GENERIC_WRITE;
-        creation_disposition = OPEN_ALWAYS;
-    } break;
-    case CY_FILE_MODE_READ | CY_FILE_MODE_READ_WRITE: {
-        desired_access = GENERIC_READ | GENERIC_WRITE;
-        creation_disposition = OPEN_EXISTING;
-    } break;
-    case CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE: {
-        desired_access = GENERIC_READ | GENERIC_WRITE;
-        creation_disposition = CREATE_ALWAYS;
-    } break;
-    case CY_FILE_MODE_APPEND | CY_FILE_MODE_READ_WRITE: {
-        desired_access = GENERIC_READ | GENERIC_WRITE;
-        creation_disposition = OPEN_ALWAYS;
-    } break;
-    default: {
-        // TODO(cya): panic
-        return CY_FILE_ERROR_INVALID;
-    } break;
-    }
-
-    CyAllocator a = cy_heap_allocator();
-    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
-    if (filename_16 == NULL) {
-        return CY_FILE_ERROR_OUT_OF_MEMORY;
-    }
-
-    DWORD file_share_mode = FILE_SHARE_READ | FILE_SHARE_DELETE;
-    HANDLE handle = CreateFileW(
-        filename_16,desired_access, file_share_mode, NULL,
-        creation_disposition, FILE_ATTRIBUTE_NORMAL, NULL
-    );
-
-    cy_free(a, filename_16);
-    if (handle == INVALID_HANDLE_VALUE) {
-        switch (GetLastError()) {
-        case ERROR_FILE_NOT_FOUND: {
-            return CY_FILE_ERROR_NOT_FOUND;
-        } break;
-        case ERROR_FILE_EXISTS:
-        case ERROR_ALREADY_EXISTS: {
-            return CY_FILE_ERROR_EXISTS;
-        } break;
-        case ERROR_ACCESS_DENIED: {
-            return CY_FILE_ERROR_NO_PERMISSION;
-        } break;
-        default: {
-            return CY_FILE_ERROR_INVALID;
-        } break;
-        }
-    }
-
-    if (mode & CY_FILE_MODE_APPEND) {
-        LARGE_INTEGER ofs = {0};
-        if (!SetFilePointerEx(handle, ofs, NULL, FILE_END)) {
-            CloseHandle(handle);
-            return CY_FILE_ERROR_INVALID;
-        }
-    }
-
-    fd->p = handle;
-    *ops = cy__default_file_ops;
-
-    return CY_FILE_ERROR_NONE;
-}
-
-cy_internal CY_FILE_READ_AT_PROC(cy__win32_file_read)
-{
-    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
-    DWORD _bytes_read;
-    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
-    if (ReadFile(fd.p, buf, truncated_size, &_bytes_read, NULL)) {
-        if (bytes_read != NULL) {
-            *bytes_read = _bytes_read;
-        }
-
-        return true;
-    }
-
-    return false;
-}
-
-cy_internal CY_FILE_WRITE_AT_PROC(cy__win32_file_write)
-{
-    DWORD truncated_size = (DWORD)CY_MIN(size, U32_MAX);
-    DWORD _bytes_written;
-    cy__win32_file_seek(fd, offset, CY_SEEK_WHENCE_BEGIN, NULL);
-    if (WriteFile(fd.p, buf, truncated_size, &_bytes_written, NULL)) {
-        if (bytes_written != NULL) {
-            *bytes_written = _bytes_written;
-        }
-
-        return true;
-    }
-
-    return false;
-}
-
-cy_internal CY_FILE_SEEK_PROC(cy__win32_file_seek)
-{
-    LARGE_INTEGER li_offset = {.QuadPart = offset};
-    if (!SetFilePointerEx(fd.p, li_offset, &li_offset, whence)) {
-        return false;
-    }
-
-    if (new_offset != NULL) {
-        *new_offset = li_offset.QuadPart;
-    }
-
-    return true;
-}
-
-cy_internal CY_FILE_CLOSE_PROC(cy__win32_file_close)
-{
-    CloseHandle(fd.p);
-}
-
-CyFile *cy_file_get_std_handle(CyFileStdType type)
-{
-    if (!cy__std_files_set) {
-#define CY__SET_STD_FILE(type, val) { \
-    cy__std_files[type].fd.p = val; \
-    cy__std_files[type].ops = cy__default_file_ops; \
-} CY_NOOP()
-        CY__SET_STD_FILE(CY_FILE_STD_IN, GetStdHandle(STD_INPUT_HANDLE));
-        CY__SET_STD_FILE(CY_FILE_STD_OUT, GetStdHandle(STD_OUTPUT_HANDLE));
-        CY__SET_STD_FILE(CY_FILE_STD_ERR, GetStdHandle(STD_ERROR_HANDLE));
-#undef CY__SET_STD_FILE
-
-        cy__std_files_set = true;
-    }
-
-    return &cy__std_files[type];
-}
-
-#else // POSIX files
-//  TODO(cya): implement
-#endif
-
-inline CyFileError cy_file_create(CyFile *f, const char *filename)
-{
-    return cy_file_open_with_mode(
-        f, CY_FILE_MODE_WRITE | CY_FILE_MODE_READ_WRITE, filename
-    );
-}
-
-inline CyFileError cy_file_open(CyFile *f, const char *filename)
-{
-    return cy_file_open_with_mode(f, CY_FILE_MODE_READ, filename);
-}
-
-CyFileError cy_file_open_with_mode(
-    CyFile *f, CyFileMode mode, const char *filename
-) {
-    CyFileError err =
-#if defined(CY_OS_WINDOWS)
-        cy__win32_file_open(&f->fd, &f->ops, mode, filename);
-#else
-        cy__posix_file_open(&f->fd, &f->ops, mode, filename);
-#endif
-
-    return err != CY_FILE_ERROR_NONE ?
-        err : cy_file_new(f, f->fd, f->ops, filename);
-}
-
-inline CyFileError cy_file_new(
-    CyFile *f, CyFileDescriptor fd, CyFileOps ops, const char *filename
-) {
-    isize len = cy_str_len(filename);
-    // TODO(cya): maybe filename should be a CyString
-    *f = (CyFile){
-        .ops = ops,
-        .fd = fd,
-        .filename = cy_alloc_copy(cy_heap_allocator(), filename, len + 1),
-        .last_write_time = cy_file_path_last_write_time(filename),
-    };
-    if (f->filename == NULL) {
-        return CY_FILE_ERROR_OUT_OF_MEMORY;
-    }
-
-    return CY_FILE_ERROR_NONE;
-}
-
-inline CyFileError cy_file_close(CyFile *f)
-{
-    if (f == NULL) {
-        return CY_FILE_ERROR_INVALID;
-    } else if (f->filename != NULL) {
-        cy_free(cy_heap_allocator(), (void*)f->filename);
-    }
-
-    b32 invalid =
-#if defined(CY_OS_WINDOWS)
-        (f->fd.p == INVALID_HANDLE_VALUE);
-#else
-        (f->fd.i < 0);
-#endif
-    if (invalid) {
-        return CY_FILE_ERROR_INVALID;
-    }
-
-    if (f->ops.read_at == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    f->ops.close(f->fd);
-    return CY_FILE_ERROR_NONE;
-}
-
-#if defined(CY_OS_WINDOWS)
-inline CyFileError cy_file_truncate(CyFile *f, isize size)
-{
-    CyFileError err = CY_FILE_ERROR_NONE;
-
-    isize prev_offset = cy_file_tell(f);
-    cy_file_seek(f, size);
-    if (!SetEndOfFile(f->fd.p)) {
-        err = CY_FILE_ERROR_TRUNCATION_FAILED;
-    }
-
-    cy_file_seek(f, prev_offset);
-    return err;
-}
-#else
-
-#endif
-
-inline b32 cy_file_read_at_report(
-    CyFile *f, void *buf,
-    isize size, isize offset, isize *bytes_read
-) {
-    if (f->ops.read_at == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    return f->ops.read_at(f->fd, buf, size, offset, bytes_read);
-}
-
-inline b32 cy_file_write_at_report(
-    CyFile *f, const void *buf,
-    isize size, isize offset, isize *bytes_written
-) {
-    if (f->ops.write_at == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    return f->ops.write_at(f->fd, buf, size, offset, bytes_written);
-}
-
-inline b32 cy_file_read_at(CyFile *f, void *buf, isize size, isize offset)
-{
-    return cy_file_read_at_report(f, buf, size, offset, NULL);
-}
-
-inline b32 cy_file_write_at(
-    CyFile *f, const void *buf, isize size, isize offset
-) {
-    return cy_file_write_at_report(f, buf, size, offset, NULL);
-}
-
-inline b32 cy_file_read(CyFile *f, void *buf, isize size)
-{
-    return cy_file_read_at(f, buf, size, cy_file_tell(f));
-}
-
-inline b32 cy_file_write(CyFile *f, const void *buf, isize size)
-{
-    return cy_file_write_at(f, buf, size, cy_file_tell(f));
-}
-
-inline isize cy_file_seek(CyFile *f, isize offset)
-{
-    isize new_offset = 0;
-    if (f->ops.seek == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    f->ops.seek(f->fd, offset, CY_SEEK_WHENCE_BEGIN, &new_offset);
-    return new_offset;
-}
-
-inline isize cy_file_seek_to_end(CyFile *f)
-{
-    isize new_offset = 0;
-    if (f->ops.seek == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_END, &new_offset);
-    return new_offset;
-}
-
-inline isize cy_file_skip(CyFile *f, isize bytes)
-{
-    isize new_offset = 0;
-    if (f->ops.seek == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    f->ops.seek(f->fd, bytes, CY_SEEK_WHENCE_CURRENT, &new_offset);
-    return new_offset;
-}
-
-inline isize cy_file_tell(CyFile *f)
-{
-    isize new_offset = 0;
-    if (f->ops.seek == NULL) {
-        f->ops = cy__default_file_ops;
-    }
-
-    f->ops.seek(f->fd, 0, CY_SEEK_WHENCE_CURRENT, &new_offset);
-    return new_offset;
-}
-
-#if defined(CY_OS_WINDOWS)
-inline isize cy_file_size(CyFile *f)
-{
-    LARGE_INTEGER size;
-    GetFileSizeEx(f->fd.p, &size);
-    return (isize)size.QuadPart;
-}
-
-inline const char *cy_file_name(CyFile *f)
-{
-    return f->filename == NULL ? "" : f->filename;
-}
-
-inline b32 cy_file_has_changed(CyFile *f)
-{
-    CyFileTime last_write_time = cy_file_path_last_write_time(f->filename);
-    b32 changed = (f->last_write_time != last_write_time);
-    if (changed) {
-        f->last_write_time = last_write_time;
-    }
-
-    return changed;
-}
-
-b32 cy_file_path_exists(const char *filename)
-{
-    WIN32_FIND_DATAW data;
-    CyAllocator a = cy_heap_allocator();
-    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
-    if (filename_16 == NULL) {
-        return false;
-    }
-
-    HANDLE handle = FindFirstFileW(filename_16, &data);
-    cy_string_16_free(filename_16);
-
-    b32 found = (handle != INVALID_HANDLE_VALUE);
-    if (found) {
-        FindClose(handle);
-    }
-
-    return found;
-}
-
-CyFileTime cy_file_path_last_write_time(const char *filename)
-{
-    ULARGE_INTEGER li = {0};
-    FILETIME last_write_time = {0};
-    WIN32_FILE_ATTRIBUTE_DATA attr = {0};
-
-    CyAllocator a = cy_heap_allocator();
-    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
-    if (filename_16 == NULL) {
-        return 0;
-    }
-
-    if (GetFileAttributesExW(filename_16, GetFileExInfoStandard, &attr)) {
-        last_write_time = attr.ftLastWriteTime;
-    }
-
-    cy_string_16_free(filename_16);
-
-    li.LowPart = last_write_time.dwLowDateTime;
-    li.HighPart = last_write_time.dwHighDateTime;
-    return (CyFileTime)li.QuadPart;
-}
-
-CyFileTime cy_file_path_copy(
-    const char *cur_filename, const char *new_filename, b32 fail_if_exists
-) {
-    b32 res = false;
-    CyAllocator a = cy_heap_allocator();
-
-    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
-    if (cur_filename_16 == NULL) {
-        return false;
-    }
-
-    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
-    if (new_filename_16 != NULL) {
-        res = CopyFileW(cur_filename_16, new_filename_16, fail_if_exists);
-    }
-
-    cy_string_16_free(new_filename_16);
-    cy_string_16_free(cur_filename_16);
-    return res;
-}
-
-CyFileTime cy_file_path_move(const char *cur_filename, const char *new_filename)
-{
-    b32 res = false;
-    CyAllocator a = cy_heap_allocator();
-
-    CyString16 cur_filename_16 = cy__win32_utf8_to_utf16(a, cur_filename);
-    if (cur_filename_16 == NULL) {
-        return false;
-    }
-
-    CyString16 new_filename_16 = cy__win32_utf8_to_utf16(a, new_filename);
-    if (new_filename_16 != NULL) {
-        res = MoveFileW(cur_filename_16, new_filename_16);
-    }
-
-    cy_string_16_free(new_filename_16);
-    cy_string_16_free(cur_filename_16);
-    return res;
-}
-
-CyFileTime cy_file_path_remove(const char *filename)
-{
-    CyAllocator a = cy_heap_allocator();
-    CyString16 filename_16 = cy__win32_utf8_to_utf16(a, filename);
-    if (filename_16 == NULL) {
-        return false;
-    }
-
-    b32 res = DeleteFileW(filename_16);
-    cy_string_16_free(filename_16);
-    return res;
-}
-
-#else // POSIX
-
-#endif
 
 #endif // CY_IMPLEMENTATION
 #endif // _CY_H

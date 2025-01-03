@@ -8,20 +8,28 @@ int main(void)
     int written = -1;
     f64 f = 766.3e8;
 
+    int n = 2048;
+    cy_printf("\nbig printf: `%0*d%0*d`\n", n, n, n, n);
+
     char buf[1024];
     const char *str = "hello :)";
     cy_str_copy(buf, str);
-    cy_printf("str:              %19c`%s`\n", ' ', buf);
+    cy_printf("str:              %19c`%s`\n", ' ', str);
     cy_printf("cy_str_copy(str): %19c`%s`\n", ' ', buf);
 
-    cy_printf("&str:       %19c%p\n", ' ', (void*)str);
-    cy_printf("&str(libc): %19c%p\n", ' ', (void*)str);
+    char smol_buf[32];
+    isize len = cy_sprintf(smol_buf, sizeof(smol_buf), "%.50f", f);
+    cy_printf("smol_buf[%zu]: `%s`\n", sizeof(smol_buf), smol_buf);
+    cy_printf("cy_sprintf returned: %zd\n", len);
+
+    cy_printf("&str:       %35p\n", (void*)str);
+       printf("&str(libc): %35p\n", (void*)str);
 
     cy_printf("ext int:             % 026i\n", 12345);
-    cy_printf("ext int(libc):       % 026i\n", 12345);
+    printf("ext int(libc):       % 026i\n", 12345);
 
     cy_printf("ext float:           %+026e\n", f);
-    cy_printf("ext float(libc):     %+026e\n", f);
+    printf("ext float(libc):     %+026e\n", f);
     cy_printf("\n");
 
     isize ret = cy_printf(
@@ -120,6 +128,14 @@ int main(void)
 
     cy_printf("float(libc):  %g\n", flt);
     cy_printf("float#(libc): %#g\n", flt);
+
+    len = cy_sprintf(NULL, 0, "%010d%n", 314, &n);
+    cy_printf("len: %zd, n: %d\n", len, n);
+
+    CyString s = cy_string_create_reserve(cy_heap_allocator(), len);
+    cy_sprintf(s, cy_string_cap(s) + 1, "%010d%n", 314, &n);
+
+    cy_printf("string: `%s`", s);
 
     return 0;
 }
