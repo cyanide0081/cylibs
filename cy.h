@@ -226,10 +226,12 @@ typedef i32 Rune; // Unicode codepoint
 #define CY_IS_IN_RANGE_EXCL(n, lo, hi) (n >= lo && n < hi)
 #define CY_IS_IN_BETWEEN(n, lo, hi) (n > lo && n < hi)
 
+
 #if defined(__builtin_inff64)
     #define CY__INF __builtin_inff64()
 #else
-    #define CY__INF (1.0 / 0.0)
+    #define CY__HUGE_VAL 1e+300
+    #define CY__INF (CY__HUGE_VAL * CY__HUGE_VAL)
 #endif
 
 #define CY_IS_INF(n) (n == +CY__INF || n == -CY__INF)
@@ -825,10 +827,6 @@ CY_DEF CyString16 cy_string_16_append_len(
 );
 CY_DEF CyString16 cy_string_16_append(CyString16 str, const CyString16 other);
 CY_DEF CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other);
-CY_DEF CyString16 cy_string_16_append_rune(CyString16 str, Rune r);
-CY_DEF CyString16 cy_string_16_append_fmt(
-    CyString16 str, const wchar_t *fmt, ...
-);
 CY_DEF CyString16 cy_string_16_append_view(CyString16 str, CyString16View view);
 
 CY_DEF CyString16View cy_string_16_view_create_len(
@@ -2779,6 +2777,8 @@ inline CyAllocator cy_heap_allocator(void)
 }
 
 #ifdef CY_OS_WINDOWS
+    #include <malloc.h>
+
     #define malloc_align(s, a) _aligned_malloc(s, a)
     #define realloc_align(alloc, mem, old_size, new_size, align) \
         _aligned_realloc(mem, new_size, align)
@@ -4563,28 +4563,6 @@ inline CyString16 cy_string_16_append(CyString16 str, const CyString16 other)
 inline CyString16 cy_string_16_append_c(CyString16 str, const wchar_t *other)
 {
     return cy_string_16_append_len(str, other, cy_wcs_len(other));
-}
-
-inline CyString16 cy_string_16_append_rune(CyString16 str, Rune r)
-{
-    // TODO(cya): utf-16 encode rune
-    return cy_string_16_append_len(str, (const wchar_t*)&r, 1);
-}
-
-extern int _vsnwprintf(wchar_t*, size_t, const wchar_t*, va_list);
-
-CyString16 cy_string_16_append_fmt(CyString16 str, const wchar_t *fmt, ...)
-{
-    va_list va;
-    va_start(va, fmt);
-
-    // TODO(cya): maybe have some fancier size handling than this?
-    wchar_t buf[0x1000] = {0};
-
-    isize len = _vsnwprintf(buf, CY_ARRAY_LEN(buf), fmt, va);
-
-    va_end(va);
-    return cy_string_16_append_len(str, buf, len);
 }
 
 inline CyString16 cy_string_16_append_view(CyString16 str, CyString16View view)

@@ -1,6 +1,9 @@
 #define CY_IMPLEMENTATION
 #include "cy.h"
 
+#define STB_SPRINTF_IMPLEMENTATION
+#include "stb_sprintf.h"
+
 extern int printf(const char*, ...);
 
 int main(void)
@@ -12,6 +15,7 @@ int main(void)
     cy_printf("\nbig printf: `%0*d%0*d`\n", n, n, n, n);
 
     char buf[1024];
+    isize buf_size = CY_ARRAY_LEN(buf);
     const char *str = "hello :)";
     cy_str_copy(buf, str);
     cy_printf("str:              %19c`%s`\n", ' ', str);
@@ -107,6 +111,48 @@ int main(void)
     printf(fmt, f, f, f, f);
     f = 123456.0000;
     printf(fmt, f, f, f, f);
+
+    elapsed = cy_ticks_elapsed(start, cy_ticks_query());
+    cy_printf(
+        "time elapsed: %.3fμs\n",
+        cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS)
+    );
+
+    cy_printf("\n");
+    cy_printf("stb_printf:\n");
+
+    start = cy_ticks_query();
+
+    f = 0.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 0.5000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 1.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = -1.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 100.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 1000.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 10000.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 12345.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 100000.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
+    f = 123456.0000;
+    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_printf("%s", buf);
 
     elapsed = cy_ticks_elapsed(start, cy_ticks_query());
     cy_printf(
