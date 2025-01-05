@@ -101,15 +101,11 @@
     #define CY_DEF extern
 #endif
 
-#if defined(__clang__) || defined(__GNUC__)
-    #define CY__FMT_ATTR(fmt) \
-        __attribute__((format(printf, fmt, (fmt) + 1)))
+#if defined(CY_STD_C_PRINTF) && (defined(__clang__) || defined(__GNUC__))
+    #define CY__FMT_ATTR(fmt) __attribute__((format(printf, fmt, (fmt) + 1)))
 #else
     #define CY__FMT_ATTR(fmt)
 #endif
-
-// NOTE(cya): so we don't have implicit changes in signedness
-#define cy_sizeof(x) (isize)(sizeof(x))
 
 /* ================================= Types ================================== */
 #include <stdint.h>
@@ -154,6 +150,9 @@ typedef i32 b32; // NOTE(cya): should be faster to address these
 #ifndef false
     #define false (0 != 0)
 #endif
+
+// NOTE(cya): so we don't have implicit changes in signedness
+#define cy_sizeof(x) (isize)(sizeof(x))
 
 // NOTE(cya): forward declarations for using the types in other procs
 typedef char *CyString;
@@ -1696,6 +1695,20 @@ cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
 cy_global const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
 cy_global const char cy__num_to_char_table_lower[] = "0123456789abcdef";
 
+cy_internal char cy__fmt_get_base_char(i32 base)
+{
+    switch (base) {
+    case 2: {
+        return 'b';
+    } break;
+    case 16: {
+        return 'x';
+    } break;
+    }
+
+    return '?';
+}
+
 cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 {
     const isize limit = cap - 1;
@@ -1704,7 +1717,8 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 
     i32 base = info->base;
     b32 style_alt = (info->flags & CY__FMT_HASH);
-    b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
+    b32 add_prefix = style_alt &&
+        (base == 2 || base == 8 || base == 16) && n != 0;
     b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
@@ -1761,9 +1775,11 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 
     if (add_prefix) {
         switch (base) {
+        case 2:
         case 16: {
             if (written < limit) {
-                *c++ = cy_char_with_case('x', style_upper);
+                char p = cy__fmt_get_base_char(base);
+                *c++ = cy_char_with_case(p, style_upper);
                 written += 1;
             }
 
@@ -1804,8 +1820,8 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
     isize written_total = 0;
 
     i32 base = info->base;
-    b32 style_alt = (info->flags & CY__FMT_HASH);
-    b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
+    // b32 style_alt = (info->flags & CY__FMT_HASH);
+    // b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
     b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
@@ -1869,26 +1885,27 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         }
     }
 
-    if (add_prefix) {
-        switch (base) {
-        case 16: {
-            if (written < limit) {
-                *c++ = cy_char_with_case('x', style_upper);
-                written += 1;
-            }
+    // TODO(cya): remove this? (we don't even print non-decimal signed values)
+    // if (add_prefix) {
+    //     switch (base) {
+    //     case 16: {
+    //         if (written < limit) {
+    //             *c++ = cy_char_with_case('x', style_upper);
+    //             written += 1;
+    //         }
 
-            written_total += 1;
-        } // NOTE(cya): fallthrough
-        case 8: {
-            if (written < limit) {
-                *c++ = '0';
-                written += 1;
-            }
+    //         written_total += 1;
+    //     } // NOTE(cya): fallthrough
+    //     case 8: {
+    //         if (written < limit) {
+    //             *c++ = '0';
+    //             written += 1;
+    //         }
 
-            written_total += 1;
-        } break;
-        }
-    }
+    //         written_total += 1;
+    //     } break;
+    //     }
+    // }
 
     if (print_sign) {
         char sign = '-';
@@ -1913,24 +1930,28 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
 }
 
 cy_internal inline isize cy__print_str(
-    char *dst, isize cap, CyFmtInfo *info, const char *src
+    char *dst, isize cap, CyFmtInfo *info, const char *src, isize len
 ) {
+    if (len == -1) {
+        len = cy_str_len(src);
+    }
+
     const isize limit = cap - 1;
     isize written = 0;
     isize written_total = 0;
 
     i32 precision = info->precision;
     if (precision > 0) {
-        while (*src != '\0' && precision > 0) {
+        while (len-- > 0 && precision-- > 0) {
             if (written < limit) {
                 *dst++ = *src++;
                 written += 1;
             }
 
-            written_total += 1, precision -= 1;
+            written_total += 1;
         }
     } else {
-        while (*src != '\0') {
+        while (len-- > 0) {
             if (written < limit) {
                 *dst++ = *src++;
                 written += 1;
@@ -1968,14 +1989,14 @@ cy_internal inline isize cy__print_str(
     } \
 } CY_NOOP()
 
-cy_global f64 cy__pow_of_10_table[] = {
+cy_global const f64 cy__pow_of_10_table[] = {
     1e00, 1e01, 1e02, 1e03, 1e04,
     1e05, 1e06, 1e07, 1e08, 1e09,
     1e10, 1e11, 1e12, 1e13, 1e14,
     1e15, 1e16, 1e16, 1e16, 1e16,
 };
 
-cy_global f64 cy__pow_of_16_table[] = {
+cy_global const f64 cy__pow_of_16_table[] = {
     0x1p00, 0x1p04, 0x1p08, 0x1p12, 0x1p16,
     0x1p20, 0x1p24, 0x1p28, 0x1p32, 0x1p36,
     0x1p40, 0x1p44, 0x1p48, 0x1p52, 0x1p56,
@@ -1992,7 +2013,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     // isize remaining = cap;
     char *cur = dst;
     if (CY_IS_NAN(n)) {
-        return cy__print_str(cur, cap, info, upper ? "NAN" : "nan");
+        return cy__print_str(cur, cap, info, upper ? "NAN" : "nan", -1);
     }
 
     if (n < 0.0) {
@@ -2020,7 +2041,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     }
 
     if (CY_IS_INF(n)) {
-        isize len = cy__print_str(cur, cap, info, upper ? "INF" : "inf");
+        isize len = cy__print_str(cur, cap, info, upper ? "INF" : "inf", -1);
         return written_total + len;
     }
 
@@ -2030,7 +2051,8 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     b32 style_alt = info->flags & CY__FMT_HASH;
 
     if (style_hex) {
-        isize len_total = cy__print_str(cur, cap, info, upper ? "0X" : "0x");
+        isize len_total =
+            cy__print_str(cur, cap, info, upper ? "0X" : "0x", -1);
         isize len = CY_MIN(len_total, cap);
 
         cur += len, written += len;
@@ -2227,20 +2249,53 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     return written_total;
 }
 
+#ifndef CY_STD_C_PRINTF
+cy_global const char *cy__b32_to_str_table[4] = {
+    "false", "true",
+    "FALSE", "TRUE",
+};
+#endif
+
 // TODO(cya):
+// * simplify some of the writing logic (set a hard limit to the width of
+//   numeric conversions) so we don't have to do all the silly checks when
+//   writing to that one in their respective subprocs (should also make it more
+//   efficient since we can just do the writes freely inside that static buffer)
 // * fix rounding errors on binary exponentiation
-// * implement extended format specifiers
-//   (seems like disabling warnings just for these is impossible)
-//   - %q for bools
-//   - %b* for binary int
-//   - %sv for stringviews
+
+/* Extended implementation of the snprintf function from the C99 standard
+ * NOTE: you can disable the extended features by defining CY_STD_C_PRINTF
+ * (you'll additionally get the compiler warnings for the format string in case
+ * your compiler supports them, since enabling this with the extended version
+ * would give you warnings when using well-defined format strings)
+ *
+ * This implementation should work as defined by the specification, so you can
+ * expect every feature of snprintf, including the return value giving you the
+ * theoretical amount of chars necessary for this conversion even if the buffer
+ * you provided isn't large enough for the string to be stored in (note that
+ * as opposed to the whole conversion, each %* conversion apart from the string
+ * specifiers does have a hard-coded length limit of 4095 bytes, so attempting
+ * to configure a conversion that exceeds that amount will result in an error
+ * being printed out)
+ *
+ * Extended format specifiers:
+ *   %q, %Q: takes in a b32 value, outputs `true` or `false` (lower/uppercase)
+ *   %v: takes in a CyStringView, outputs its string
+ *   %b: takes in an unsigned int, outputs its string in base 2 (binary)
+ *
+ * Explicit-sized integers:
+ *   You can explicitly size any integer input flag by appending its size to it
+ *   (e.g.: %u32, %i64, %x16, etc.) - note that this is incompatible with the
+ *   standard C size specifiers and trying to use both simultaneously will
+ *   result in an error being printed out
+ */
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
     // NOTE(cya): written_total is how much _would_ be written in case the buf
     // wasn't large enough, while written is how much _was_ written which
     // truncates if we reach the end of the buffer, that way we can report the
     // amount of bytes necessary for this whole conversion to work and the user
-    // can allocate a suitable buffer and recall this procedure if necessary
+    // can allocate a suitable buffer if needed and then recall this procedure
     // (all the cy__print_* subprocs use this pattern)
     const isize limit = size - 1;
     isize written_total = 0;
@@ -2248,7 +2303,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 
     char *end = buf;
     const char *f = fmt;
-    for (;;) {
+    for (b32 panic = false; !panic;) {
         for (; *f != '\0' && *f != '%'; f++) {
             char c = *f;
 #if defined(CY_OS_WINDOWS)
@@ -2306,6 +2361,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
         } while (!done);
 
+        done = false;
         if (cy_char_is_digit(*f)) {
             u64 width;
             isize len = cy__scan_u64(f, 10, &width);
@@ -2366,7 +2422,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         }
 
         b32 out_arg = false;
-        isize conv_len = 0;
+        isize conv_len = 0, conv_len_total = 0;
         switch (*f) {
         case 'd':
         case 'i': {
@@ -2427,14 +2483,19 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 *(u8*)conv_buf = (u8)va_arg(va, int);
                 conv_len = 1;
             }
+
+            done = true;
         } break;
         case 's': {
             if (info.flags & CY__FMT_LEN_LONG) {
                 // TODO(cya): same as the todo above
             } else {
-                const char *src = va_arg(va, char*);
-                conv_len = cy__print_str(conv_buf, conv_cap, &info, src);
+                const char *str = va_arg(va, char*);
+                conv_len = cy__print_str(conv_buf, conv_cap, &info, str, -1);
+
             }
+            
+            done = true;
         } break;
         case 'p': {
             const char prefix[] = "0x";
@@ -2450,38 +2511,147 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 .flags = (CY__FMT_ZERO | CY__FMT_STYLE_UPPER),
                 .width = 16,
             }, (u64)ptr);
+
+            done = true;
         } break;
-#if 0
-        case 'q': {
-            b32 val = (b32)va_arg(va, int);
-            const char *str = val ? "true" : "false";
-            conv_len = cy__print_str(conv_buf, conv_cap, &info, str);
-        } break;
-#endif
         case 'n': {
             out_arg = true;
         } break;
         case '%': {
             *conv_buf = '%';
             conv_len = 1;
+            done = true;
         } break;
+#ifndef CY_STD_C_PRINTF // NOTE(cya): extended format specifiers
+        case 'b':
+        case 'B': { // NOTE(cya): binary ints
+            info.flags |= CY__FMT_UNSIGNED;
+            info.base = 2;
+            if (cy_char_is_upper(*f)) {
+                info.flags |= CY__FMT_STYLE_UPPER;
+            }
+        } break;
+        case 'q':
+        case 'Q': {
+            isize ofs = cy_char_is_upper(*f) ? 2 : 0;
+
+            b32 val = !!(b32)va_arg(va, int);
+            const char *str = cy__b32_to_str_table[ofs + val];
+            conv_len = cy__print_str(conv_buf, conv_cap, &info, str, -1);
+
+            done = true;
+        } break;
+        case 'v': {
+            CyStringView v = va_arg(va, CyStringView);
+            conv_len = cy__print_str(
+                conv_buf, conv_cap, &info, (const char*)v.text, v.len
+            );
+            
+            done = true;
+        } break;
+#endif
         default: {
             // TODO(cya): invalid fmt spec: print suitable error
-            continue;
+            const char *msg = "%![MISSING OR INVALID FORMAT SPECIFIER]";
+            conv_len = cy__print_str(conv_buf, conv_cap, &info, msg, -1);
+            
+            done = true;
         } break;
         }
 
         f += 1;
+
+#ifndef CY_STD_C_PRINTF
+        // NOTE(cya): parsing sized format specs (%u64, %d32, %i16, etc.)
+        u8 bit_size = 0;
+        if ((info.flags & CY__FMT_INTS) && cy_char_is_digit(*f)) {
+            u8 skip = 1;
+            switch (*f) {
+            case '8': {
+                bit_size = 8;
+            } break;
+            case '1': {
+                if (*(f + 1) == '6') {
+                    bit_size = 16;
+                    skip += 1;
+                }
+            } break;
+            case '3': {
+                if (*(f + 1) == '2') {
+                    bit_size = 32;
+                    skip += 1;
+                }
+            } break;
+            case '6': {
+                if (*(f + 1) == '4') {
+                    bit_size = 64;
+                    skip += 1;
+                }
+            } break;
+            default: {
+                skip = 0;
+            } break;
+            }
+
+            f += skip;
+            if (bit_size > 0) {
+                if (info.flags & CY__FMT_UNSIGNED) {
+                    u64 val = 0;
+                    switch (bit_size) {
+                    case 8: {
+                        val = (u64)((u8)va_arg(va, int));
+                    } break;
+                    case 16: {
+                        val = (u64)((u16)va_arg(va, int));
+                    } break;
+                    case 32: {
+                        val = (u64)va_arg(va, u32);
+                    } break;
+                    case 64: {
+                        val = va_arg(va, u64);
+                    } break;
+                    }
+
+                    conv_len = cy__print_u64(conv_buf, conv_cap, &info, val);
+                } else if (info.flags & CY__FMT_INT) {
+                    i64 val = 0;
+                    switch (bit_size) {
+                    case 8: {
+                        val = (i64)((i8)va_arg(va, int));
+                    } break;
+                    case 16: {
+                        val = (i64)((i16)va_arg(va, int));
+                    } break;
+                    case 32: {
+                        val = (i64)va_arg(va, i32);
+                    } break;
+                    case 64: {
+                        val = va_arg(va, i64);
+                    } break;
+                    }
+
+                    conv_len = cy__print_i64(conv_buf, conv_cap, &info, val);
+                }
+
+                done = true;
+            }
+        }
+#endif
+
+        if (done) {
+            goto fmt_check_width;
+        }
+        
         if (out_arg) {
             void *out = va_arg(va, void*);
             if (out != NULL) {
                 isize val = written_total;
                 switch (info.flags & CY__FMT_LEN_MODS) {
                 case CY__FMT_LEN_CHAR: {
-                    *((i8*)out) = (i8)val;
+                    *((signed char*)out) = (signed char)val;
                 } break;
                 case CY__FMT_LEN_SHORT: {
-                    *((i16*)out) = (i16)val;
+                    *((short*)out) = (short)val;
                 } break;
                 case CY__FMT_LEN_LONG: {
                     *((long*)out) = (long)val;
@@ -2509,10 +2679,10 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     u64 val;
                     switch (info.flags & CY__FMT_LEN_MODS) {
                     case CY__FMT_LEN_CHAR: {
-                        val = (u64)((u8)va_arg(va, int));
+                        val = (u64)((unsigned char)va_arg(va, int));
                     } break;
                     case CY__FMT_LEN_SHORT: {
-                        val = (u64)((u16)va_arg(va, int));
+                        val = (u64)((unsigned short)va_arg(va, int));
                     } break;
                     case CY__FMT_LEN_LONG: {
                         val = (u64)va_arg(va, unsigned long);
@@ -2537,10 +2707,10 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                     i64 val;
                     switch (info.flags & CY__FMT_LEN_MODS) {
                     case CY__FMT_LEN_CHAR: {
-                        val = (i64)((i8)va_arg(va, int));
+                        val = (i64)((signed char)va_arg(va, int));
                     } break;
                     case CY__FMT_LEN_SHORT: {
-                        val = (i64)((i16)va_arg(va, int));
+                        val = (i64)((short)va_arg(va, int));
                     } break;
                     case CY__FMT_LEN_LONG: {
                         val = (i64)va_arg(va, long);
@@ -2569,7 +2739,8 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
         }
 
-        isize conv_len_total = conv_len;
+fmt_check_width:
+        conv_len_total = conv_len;
         conv_len = CY_MIN(conv_len, conv_cap);
 
         // NOTE(cya): width padding

@@ -181,7 +181,16 @@ int main(void)
     CyString s = cy_string_create_reserve(cy_heap_allocator(), len);
     cy_sprintf(s, cy_string_cap(s) + 1, "%010d%n", 314, &n);
 
-    cy_printf("string: `%s`", s);
+    cy_printf("string: `%s`\n", s);
+
+    cy_printf("bool: %q\n", true);
+    cy_printf("binary int: %#b\n", 1024);
+
+    CyStringView v = cy_string_view_create_c("hi i'm a stringview");
+    cy_printf("stringview: `%v`\n", v);
+
+    u32 u = 24;
+    cy_printf("sized int: %32\n", u);
 
     return 0;
 }
