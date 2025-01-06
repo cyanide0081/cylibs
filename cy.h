@@ -442,10 +442,11 @@ CY_DEF CyString cy_path_full_version(const char *path);
 
 /* =================================== I/O ================================== */
 CY_DEF isize cy_printf(const char *fmt, ...) CY__FMT_ATTR(1);
-CY_DEF isize cy_printf_err(const char *fmt, ...) CY__FMT_ATTR(1);
-
 CY_DEF isize cy_printf_va(const char *fmt, va_list va);
-CY_DEF isize cy_printf_err_va(const char *fmt, va_list va);
+
+// NOTE(cya): equivalent to fprintf(stderr, ...)
+CY_DEF isize cy_eprintf(const char *fmt, ...) CY__FMT_ATTR(1);
+CY_DEF isize cy_eprintf_va(const char *fmt, va_list va);
 
 CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__FMT_ATTR(2);
 CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
@@ -455,8 +456,8 @@ CY_DEF isize cy_sprintf(
 ) CY__FMT_ATTR(3);
 CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
 
-CY_DEF char *cy_asprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
-CY_DEF char *cy_asprintf_va(CyAllocator a, const char *fmt, va_list va);
+CY_DEF char *cy_aprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
+CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
 
 /* =============================== Allocators =============================== */
 typedef enum {
@@ -869,18 +870,18 @@ void cy_handle_assertion(
     const char *msg,
     ...
 ) {
-    cy_printf_err("%s(%d): %s: ", file, line, prefix);
+    cy_eprintf("%s(%d): %s: ", file, line, prefix);
     if (cond != NULL) {
-        cy_printf_err( "`%s` ", cond);
+        cy_eprintf( "`%s` ", cond);
     }
     if (msg != NULL) {
         va_list va;
         va_start(va, msg);
-        cy_printf_err_va(msg, va);
+        cy_eprintf_va(msg, va);
         va_end(va);
     }
 
-    cy_printf_err("\n");
+    cy_eprintf("\n");
 }
 
 inline void *cy_mem_copy(
@@ -1509,22 +1510,22 @@ inline isize cy_printf(const char *fmt, ...)
     return len;
 }
 
-inline isize cy_printf_err(const char *fmt, ...)
-{
-    va_list va;
-    va_start(va, fmt);
-    isize len = cy_printf_err_va(fmt, va);
-    va_end(va);
-
-    return len;
-}
-
 inline isize cy_printf_va(const char *fmt, va_list va)
 {
     return cy_fprintf_va(cy_file_get_std_handle(CY_FILE_STD_OUT), fmt, va);
 }
 
-inline isize cy_printf_err_va(const char *fmt, va_list va)
+inline isize cy_eprintf(const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    isize len = cy_eprintf_va(fmt, va);
+    va_end(va);
+
+    return len;
+}
+
+inline isize cy_eprintf_va(const char *fmt, va_list va)
 {
     return cy_fprintf_va(cy_file_get_std_handle(CY_FILE_STD_ERR), fmt, va);
 }
@@ -1539,15 +1540,19 @@ inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
     return len;
 }
 
-#define CY__IO_INTERNAL_BUF_SIZE 4096
+#define CY__FMT_CONV_BUF_SIZE 4096
 
 inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
-    cy_persist char static_buf[CY__IO_INTERNAL_BUF_SIZE];
+    char static_buf[CY__FMT_CONV_BUF_SIZE];
     isize static_size = CY_ARRAY_LEN(static_buf);
     isize len = cy_sprintf_va(static_buf, static_size, fmt, va);
 
     char *src = static_buf;
+    if (len < 0) {
+        len = -len; // NOTE(cya): conversion error but text is still printable
+    }
+    
     b32 use_heap = (len >= static_size);
     if (use_heap) {
         isize heap_size = len + 1;
@@ -1561,7 +1566,7 @@ inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
             use_heap = false;
         }
     }
-
+    
     cy_file_write(f, src, len);
     if (use_heap) {
         cy_free(cy_heap_allocator(), src);
@@ -1725,7 +1730,9 @@ cy_internal isize cy__print_u64(char *dst, isize cap, CyFmtInfo *info, u64 n)
 
     char *c = dst;
     if (n == 0) {
-        if (written < limit) {
+        if (info->precision == 0) {
+            return 0; // NOTE(cya): edge case from the spec
+        } if (written < limit) {
             *c++ = '0';
             written += 1;
         }
@@ -1820,8 +1827,6 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
     isize written_total = 0;
 
     i32 base = info->base;
-    // b32 style_alt = (info->flags & CY__FMT_HASH);
-    // b32 add_prefix = style_alt && (base == 8 || base == 16) && n != 0;
     b32 style_upper = (info->flags & CY__FMT_STYLE_UPPER);
     const char *table = style_upper ?
         cy__num_to_char_table_upper : cy__num_to_char_table_lower;
@@ -1832,11 +1837,12 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
         n = -n;
     }
 
-    // isize remaining = cap;
     char *c = dst;
     u64 v = (u64)n;
     if (v == 0) {
-        if (written < limit) {
+        if (info->precision == 0) {
+            return 0; // NOTE(cya): edge case from the spec
+        } else if (written < limit) {
             *c++ = '0';
             written += 1;
         }
@@ -1884,28 +1890,6 @@ cy_internal isize cy__print_i64(char *dst, isize cap, CyFmtInfo *info, i64 n)
             written_total += 1;
         }
     }
-
-    // TODO(cya): remove this? (we don't even print non-decimal signed values)
-    // if (add_prefix) {
-    //     switch (base) {
-    //     case 16: {
-    //         if (written < limit) {
-    //             *c++ = cy_char_with_case('x', style_upper);
-    //             written += 1;
-    //         }
-
-    //         written_total += 1;
-    //     } // NOTE(cya): fallthrough
-    //     case 8: {
-    //         if (written < limit) {
-    //             *c++ = '0';
-    //             written += 1;
-    //         }
-
-    //         written_total += 1;
-    //     } break;
-    //     }
-    // }
 
     if (print_sign) {
         char sign = '-';
@@ -2003,6 +1987,8 @@ cy_global const f64 cy__pow_of_16_table[] = {
     0x1p60, 0x1p60, 0x1p60, 0x1p60, 0x1p60,
 };
 
+// TODO(cya):
+// * correct rounding errors on binary exponentiation (probably requires MPA)
 cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
 {
     const isize limit = cap - 1;
@@ -2105,6 +2091,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
     isize remaining = limit - written;
     isize len_total = integral_len = cy__print_u64(cur, remaining, &(CyFmtInfo){
         .base = info->base,
+        .precision = -1,
     }, integral);
 
     len = integral_len = CY_MIN(len_total, remaining);
@@ -2222,6 +2209,7 @@ cy_internal isize cy__print_f64(char *dst, isize cap, CyFmtInfo *info, f64 n)
         remaining = limit - written;
         len_total = cy__print_i64(cur, remaining, &(CyFmtInfo){
             .base = 10,
+            .precision = -1,
         }, exponent);
 
         len = CY_MIN(len_total, remaining);
@@ -2256,15 +2244,9 @@ cy_global const char *cy__b32_to_str_table[4] = {
 };
 #endif
 
-// TODO(cya):
-// * simplify some of the writing logic (set a hard limit to the width of
-//   numeric conversions) so we don't have to do all the silly checks when
-//   writing to that one in their respective subprocs (should also make it more
-//   efficient since we can just do the writes freely inside that static buffer)
-// * fix rounding errors on binary exponentiation
-
-/* Extended implementation of the snprintf function from the C99 standard
- * NOTE: you can disable the extended features by defining CY_STD_C_PRINTF
+/* Extended implementation of the snprintf function from the C99 standard 
+ * (no sprintf without a buffer size parameter because that'd be a bit silly)
+ * NOTE: you can disable the extended formats by defining CY_STD_C_PRINTF
  * (you'll additionally get the compiler warnings for the format string in case
  * your compiler supports them, since enabling this with the extended version
  * would give you warnings when using well-defined format strings)
@@ -2272,38 +2254,44 @@ cy_global const char *cy__b32_to_str_table[4] = {
  * This implementation should work as defined by the specification, so you can
  * expect every feature of snprintf, including the return value giving you the
  * theoretical amount of chars necessary for this conversion even if the buffer
- * you provided isn't large enough for the string to be stored in (note that
- * as opposed to the whole conversion, each %* conversion apart from the string
- * specifiers does have a hard-coded length limit of 4095 bytes, so attempting
- * to configure a conversion that exceeds that amount will result in an error
- * being printed out)
+ * you provided isn't large enough for the string to be stored in it (note that
+ * as opposed to the whole conversion, each %* conversion apart has a hard-coded
+ * length limit of 4095 bytes, so attempting to configure a conversion that
+ * exceeds that amount will result in an error being printed out to the buffer)
+ * 
+ * If any conversion error occurs because of bad parameters or flags, a suitable
+ * message will be appended to the buffer and the procedure will return the
+ * negated length of the conversion up to that point, so you can choose whether
+ * to print the string anyway or not
  *
  * Extended format specifiers:
- *   %q, %Q: takes in a b32 value, outputs `true` or `false` (lower/uppercase)
- *   %v: takes in a CyStringView, outputs its string
- *   %b: takes in an unsigned int, outputs its string in base 2 (binary)
+ *   %q, %Q: takes in a b32, b16 or b8 value, outputs `true` or `false`
+ *     (lower/uppercase)
+ *   %v: takes in a CyStringView, outputs its text
+ *   %b: takes in an unsigned int, outputs it in base 2 (binary)
  *
  * Explicit-sized integers:
  *   You can explicitly size any integer input flag by appending its size to it
- *   (e.g.: %u32, %i64, %x16, etc.) - note that this is incompatible with the
+ *   (e.g.: %u32, %i64, %b8, etc.) - note that this is incompatible with the
  *   standard C size specifiers and trying to use both simultaneously will
  *   result in an error being printed out
  */
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
     // NOTE(cya): written_total is how much _would_ be written in case the buf
-    // wasn't large enough, while written is how much _was_ written which
-    // truncates if we reach the end of the buffer, that way we can report the
+    // wasn't large enough, while written is how much _was_ written which can
+    // truncate if we reach the end of the buffer, that way we can report the
     // amount of bytes necessary for this whole conversion to work and the user
     // can allocate a suitable buffer if needed and then recall this procedure
-    // (all the cy__print_* subprocs use this pattern)
+    // (all the cy__print_* subprocs use this pattern to propagate this logic)
     const isize limit = size - 1;
     isize written_total = 0;
     isize written = 0;
 
     char *end = buf;
     const char *f = fmt;
-    for (b32 panic = false; !panic;) {
+    b32 err = false;
+    for (; !err;) {
         for (; *f != '\0' && *f != '%'; f++) {
             char c = *f;
 #if defined(CY_OS_WINDOWS)
@@ -2332,7 +2320,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             break;
         }
 
-        char conv_buf[CY__IO_INTERNAL_BUF_SIZE];
+        char conv_buf[CY__FMT_CONV_BUF_SIZE];
         isize conv_cap = CY_ARRAY_LEN(conv_buf) - 1;
 
         CyFmtInfo info = {.precision = -1};
@@ -2361,7 +2349,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
         } while (!done);
 
-        done = false;
         if (cy_char_is_digit(*f)) {
             u64 width;
             isize len = cy__scan_u64(f, 10, &width);
@@ -2422,7 +2409,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         }
 
         b32 out_arg = false;
-        isize conv_len = 0, conv_len_total = 0;
+        isize conv_len = 0;
         switch (*f) {
         case 'd':
         case 'i': {
@@ -2483,8 +2470,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 *(u8*)conv_buf = (u8)va_arg(va, int);
                 conv_len = 1;
             }
-
-            done = true;
         } break;
         case 's': {
             if (info.flags & CY__FMT_LEN_LONG) {
@@ -2494,8 +2479,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 conv_len = cy__print_str(conv_buf, conv_cap, &info, str, -1);
 
             }
-            
-            done = true;
         } break;
         case 'p': {
             const char prefix[] = "0x";
@@ -2511,8 +2494,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 .flags = (CY__FMT_ZERO | CY__FMT_STYLE_UPPER),
                 .width = 16,
             }, (u64)ptr);
-
-            done = true;
         } break;
         case 'n': {
             out_arg = true;
@@ -2520,7 +2501,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         case '%': {
             *conv_buf = '%';
             conv_len = 1;
-            done = true;
         } break;
 #ifndef CY_STD_C_PRINTF // NOTE(cya): extended format specifiers
         case 'b':
@@ -2538,8 +2518,6 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             b32 val = !!(b32)va_arg(va, int);
             const char *str = cy__b32_to_str_table[ofs + val];
             conv_len = cy__print_str(conv_buf, conv_cap, &info, str, -1);
-
-            done = true;
         } break;
         case 'v': {
             CyStringView v = va_arg(va, CyStringView);
@@ -2547,15 +2525,14 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
                 conv_buf, conv_cap, &info, (const char*)v.text, v.len
             );
             
-            done = true;
         } break;
 #endif
         default: {
-            // TODO(cya): invalid fmt spec: print suitable error
             const char *msg = "%![MISSING OR INVALID FORMAT SPECIFIER]";
             conv_len = cy__print_str(conv_buf, conv_cap, &info, msg, -1);
             
-            done = true;
+            err = true;
+            goto fmt_copy_buf;
         } break;
         }
 
@@ -2563,9 +2540,8 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 
 #ifndef CY_STD_C_PRINTF
         // NOTE(cya): parsing sized format specs (%u64, %d32, %i16, etc.)
-        u8 bit_size = 0;
+        u8 bit_size = 0, skip = 1;
         if ((info.flags & CY__FMT_INTS) && cy_char_is_digit(*f)) {
-            u8 skip = 1;
             switch (*f) {
             case '8': {
                 bit_size = 8;
@@ -2594,54 +2570,61 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
 
             f += skip;
-            if (bit_size > 0) {
-                if (info.flags & CY__FMT_UNSIGNED) {
-                    u64 val = 0;
-                    switch (bit_size) {
-                    case 8: {
-                        val = (u64)((u8)va_arg(va, int));
-                    } break;
-                    case 16: {
-                        val = (u64)((u16)va_arg(va, int));
-                    } break;
-                    case 32: {
-                        val = (u64)va_arg(va, u32);
-                    } break;
-                    case 64: {
-                        val = va_arg(va, u64);
-                    } break;
-                    }
-
-                    conv_len = cy__print_u64(conv_buf, conv_cap, &info, val);
-                } else if (info.flags & CY__FMT_INT) {
-                    i64 val = 0;
-                    switch (bit_size) {
-                    case 8: {
-                        val = (i64)((i8)va_arg(va, int));
-                    } break;
-                    case 16: {
-                        val = (i64)((i16)va_arg(va, int));
-                    } break;
-                    case 32: {
-                        val = (i64)va_arg(va, i32);
-                    } break;
-                    case 64: {
-                        val = va_arg(va, i64);
-                    } break;
-                    }
-
-                    conv_len = cy__print_i64(conv_buf, conv_cap, &info, val);
+        }
+        
+        if (bit_size > 0) {
+            if (info.flags & CY__FMT_LEN_MODS) {
+                const char *msg = 
+                    "%![INVALID MIX OF LENGTH AND BITSIZE MODIFIERS]";
+                conv_len = cy__print_str(
+                    conv_buf, conv_cap, &info, msg, -1
+                );
+                err = true;
+                goto fmt_copy_buf;
+            } else if (info.flags & CY__FMT_UNSIGNED) {
+                u64 val = 0;
+                switch (bit_size) {
+                case 8: {
+                    val = (u64)((u8)va_arg(va, int));
+                } break;
+                case 16: {
+                    val = (u64)((u16)va_arg(va, int));
+                } break;
+                case 32: {
+                    val = (u64)va_arg(va, u32);
+                } break;
+                case 64: {
+                    val = va_arg(va, u64);
+                } break;
                 }
 
-                done = true;
+                conv_len = cy__print_u64(conv_buf, conv_cap, &info, val);
+                goto fmt_check_width;
+            } else if (info.flags & CY__FMT_INT) {
+                i64 val = 0;
+                switch (bit_size) {
+                case 8: {
+                    val = (i64)((i8)va_arg(va, int));
+                } break;
+                case 16: {
+                    val = (i64)((i16)va_arg(va, int));
+                } break;
+                case 32: {
+                    val = (i64)va_arg(va, i32);
+                } break;
+                case 64: {
+                    val = va_arg(va, i64);
+                } break;
+                }
+
+                conv_len = cy__print_i64(conv_buf, conv_cap, &info, val);
+                goto fmt_check_width;
+            } else {
+                f -= skip;
             }
         }
 #endif
 
-        if (done) {
-            goto fmt_check_width;
-        }
-        
         if (out_arg) {
             void *out = va_arg(va, void*);
             if (out != NULL) {
@@ -2673,7 +2656,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
             }
 
             continue;
-        } else if (info.base != 0) { // NOTE(cya): print a number
+        } else if (info.base != 0) { // NOTE(cya): print a number (C notation)
             if (info.flags & CY__FMT_INTS) {
                 if (info.flags & CY__FMT_UNSIGNED) {
                     u64 val;
@@ -2740,13 +2723,16 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
         }
 
 fmt_check_width:
-        conv_len_total = conv_len;
-        conv_len = CY_MIN(conv_len, conv_cap);
-
-        // NOTE(cya): width padding
+        if (conv_len > conv_cap) {
+            const char *msg = "%![CONVERSION LENGTH OVER 4095 BYTE LIMIT]";
+            conv_len = cy__print_str(conv_buf, conv_cap, &info, msg, -1);
+            
+            err = true;
+        }
+        
         b32 right_pad = info.flags & CY__FMT_MINUS;
         b32 fill_with_zeros = !right_pad && (info.flags & CY__FMT_ZERO);
-        if (!fill_with_zeros && conv_len < info.width) {
+        if (!err && !fill_with_zeros && conv_len < info.width) {
             // NOTE(cya): truncating to remaining length
             isize remaining = conv_cap - conv_len;
             char *conv_end = conv_buf + conv_len;
@@ -2759,46 +2745,46 @@ fmt_check_width:
                 cy_mem_set(conv_buf, ' ', extra);
             }
 
-            isize extra_total = info.width - conv_len_total;
-            conv_len_total += extra_total;
             conv_len += extra;
         }
 
+fmt_copy_buf:
         if (written < limit) {
             isize remaining = limit - written;
             isize copy_len = CY_MIN(remaining, conv_len);
 
             cy_mem_copy(end, conv_buf, copy_len);
-            end += copy_len;
+            end += copy_len, written += copy_len;
         }
 
-
-        written += conv_len;
-        written_total += conv_len_total;
+        written_total += conv_len;
     }
 
     if (end != NULL) {
         *end = '\0';
     }
 
-    return written_total;
+    return err ? -written_total : written_total;
 }
 
-inline char *cy_asprintf(CyAllocator a, const char *fmt, ...)
+inline char *cy_aprintf(CyAllocator a, const char *fmt, ...)
 {
     va_list va;
     va_start(va, fmt);
-    char *res = cy_asprintf_va(a, fmt, va);
+    char *res = cy_aprintf_va(a, fmt, va);
     va_end(va);
 
     return res;
 }
 
-inline char *cy_asprintf_va(CyAllocator a, const char *fmt, va_list va)
+inline char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va)
 {
     isize init_size = 4096;
     char *buf = cy_alloc(a, init_size);
     isize len = cy_sprintf_va(buf, init_size, fmt, va);
+    if (len < 0) {
+        len = -len;
+    }
 
     isize new_size = len + 1;
     char *new_buf = cy_resize(a, buf, init_size, new_size);
@@ -4295,7 +4281,7 @@ CyString cy_string_append_fmt(CyString str, const char *fmt, ...)
     va_start(va, fmt);
 
     CyAllocator a = CY_STRING_HEADER(str)->alloc;
-    char *buf = cy_asprintf_va(a, fmt, va);
+    char *buf = cy_aprintf_va(a, fmt, va);
 
     va_end(va);
     str = cy_string_append_c(str, buf);
@@ -4351,7 +4337,7 @@ inline CyString cy_string_prepend_fmt(CyString str, const char *fmt, ...)
     va_start(va, fmt);
 
     CyAllocator a = CY_STRING_HEADER(str)->alloc;
-    char *buf = cy_asprintf_va(a, fmt, va);
+    char *buf = cy_aprintf_va(a, fmt, va);
 
     va_end(va);
     str = cy_string_prepend_c(str, buf);

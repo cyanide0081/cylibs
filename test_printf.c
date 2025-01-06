@@ -190,7 +190,11 @@ int main(void)
     cy_printf("stringview: `%v`\n", v);
 
     u32 u = 24;
-    cy_printf("sized int: %32\n", u);
+    cy_printf("sized int: %32", u);
+    cy_printf("\n");
+    cy_printf("long int: %04096u\n", 1);
+    cy_printf("\n");
+    cy_printf("zero precision: %.0u\n", 0);
 
     return 0;
 }
