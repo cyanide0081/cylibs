@@ -1,22 +1,47 @@
 #ifndef CY__H_INCLUDE
 #define CY__H_INCLUDE
 
-// NOTE(cya): a lot of this library is borrowed from GingerBill's gb library
-// https://github.com/gingerBill/gb/blob/master/gb.h
-
+/**
+ * A single-header libc replacement for modern systems (32/64-bit machines)
+ * (this will be better documented eventually)
+ *
+ * NOTE: many foundational components/interfaces of this library
+ * (allocators, strings, file I/O, etc.) are borrowed from/inspired by
+ *  GingerBill's gb library -> https://github.com/gingerBill/gb
+ */
+ 
 /******************************************************************************
  *                               DECLARATIONS                                 *
  ******************************************************************************/
+#if defined(_MSC_VER)
+    #define CY_COMPILER_MSVC 1
+#elif defined(__GNUC__)
+    #define CY_COMPILER_GCC 1
+#elif defined(__clang__)
+    #define CY_COMPILER_CLANG 1
+#else
+    #error Unsupported compiler
+#endif
+ 
 #if defined(_WIN32) || defined(_WIN64)
     #define CY_OS_WINDOWS 1
-    #define _CRT_SECURE_NO_WARNINGS 1
+    #ifndef __MINGW32__
+        #ifndef _CRT_SECURE_NO_WARNINGS
+            #define _CRT_SECURE_NO_WARNINGS 1
+        #endif
+    #endif
+
     #define WIN32_LEAN_AND_MEAN 1
+    #define WIN32_MEAN_AND_LEAN 1
     #define VC_EXTRALEAN 1
     #define NOMINMAX 1
+    
     #include <windows.h>
-    #undef WIN32_LEAN_AND_MEAN
-    #undef VC_EXTRALEAN
+    
     #undef NOMINMAX
+    #undef VC_EXTRALEAN
+    #undef WIN32_MEAN_AND_LEAN
+    #undef WIN32_LEAN_AND_MEAN
 #elif defined(__APPLE__) && defined(__MACH__)
     #define CY_OS_MACOSX 1
 #elif defined(__unix__)
@@ -108,7 +133,21 @@
 #endif
 
 /* ================================= Types ================================== */
-#include <stdint.h>
+#if defined(CY_COMPILER_MSVC)
+typedef signed __int8 i8;
+typedef signed __int16 i16;
+typedef signed __int32 i32;
+typedef signed __int64 i64;
+
+typedef unsigned __int8 u8;
+typedef unsigned __int16 u16;
+typedef unsigned __int32 u32;
+typedef unsigned __int64 u64;
+
+typedef float f32;
+typedef double f64;
+#else
+    #include <stdint.h>
 
 typedef int8_t i8;
 typedef int16_t i16;
@@ -119,6 +158,17 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
+#endif
+
+CY_STATIC_ASSERT(sizeof(i8) == sizeof(u8));
+CY_STATIC_ASSERT(sizeof(i16) == sizeof(u16));
+CY_STATIC_ASSERT(sizeof(i32) == sizeof(u32));
+CY_STATIC_ASSERT(sizeof(i64) == sizeof(u64));
+
+CY_STATIC_ASSERT(sizeof(i8) == 1);
+CY_STATIC_ASSERT(sizeof(i16) == 2);
+CY_STATIC_ASSERT(sizeof(i32) == 4);
+CY_STATIC_ASSERT(sizeof(i64) == 8);
 
 typedef float f32;
 typedef double f64;
@@ -142,7 +192,7 @@ CY_STATIC_ASSERT(sizeof(intptr) == sizeof(uintptr));
 
 typedef i8 b8;
 typedef i16 b16;
-typedef i32 b32; // NOTE(cya): should be faster to address these
+typedef i32 b32; // NOTE(cya): should be the default ones
 
 #ifndef true
     #define true (0 == 0)
@@ -154,7 +204,7 @@ typedef i32 b32; // NOTE(cya): should be faster to address these
 // NOTE(cya): so we don't have implicit changes in signedness
 #define cy_sizeof(x) (isize)(sizeof(x))
 
-// NOTE(cya): forward declarations for using the types in other procs
+// NOTE(cya): forward declarations for using the types in other procedures
 typedef char *CyString;
 typedef struct CyStringView CyStringView;
 typedef struct CyAllocator CyAllocator;
@@ -213,7 +263,9 @@ typedef i32 Rune; // Unicode codepoint
 #define cy_persist static
 
 /* ================================= Runtime ================================ */
-#include <stdarg.h>  // va_args
+#ifndef CY_OS_WINDOWS
+    #include <stdarg.h>  // va_args
+#endif
 
 #define CY_BIT(n) (1 << (n))
 #define CY_UNUSED(param) (void)(param)
@@ -251,9 +303,6 @@ CY_DEF void cy_handle_assertion(
     i32 line, const char *msg,
     ...
 );
-
-// TODO(cya): remove header and implement mem functions
-#include <string.h>
 
 CY_DEF void *cy_mem_copy(
     void *restrict dst, const void *restrict src, isize bytes
@@ -312,7 +361,7 @@ typedef enum {
     CY_FILE_ERROR_INVALID_FILENAME,
     CY_FILE_ERROR_EXISTS,
     CY_FILE_ERROR_NOT_FOUND,
-    CY_FILE_ERROR_NO_PERMISSION,
+    CY_FILE_ERROR_ACCESS_DENIED,
     CY_FILE_ERROR_TRUNCATION_FAILED,
 } CyFileError;
 
@@ -374,6 +423,8 @@ typedef enum {
     CY_FILE_STD_ERR,
     CY__FILE_STD_COUNT
 } CyFileStdType;
+
+CY_DEF const char *cy_file_error_as_str(CyFileError err);
 
 CY_DEF CyFile *cy_file_get_std_handle(CyFileStdType type);
 
@@ -451,13 +502,46 @@ CY_DEF isize cy_eprintf_va(const char *fmt, va_list va);
 CY_DEF isize cy_fprintf(CyFile *f, const char *fmt, ...) CY__FMT_ATTR(2);
 CY_DEF isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va);
 
+CY_DEF char *cy_aprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
+CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
+
+/**
+ * Extended implementation of the snprintf function from the C99 standard 
+ * (no sprintf without a buffer size parameter because that'd be a bit silly)
+ * NOTE: you can disable the extended formats by defining CY_STD_C_PRINTF
+ * (you'll additionally get the compiler warnings for the format string in case
+ * your compiler supports them, since enabling this with the extended version
+ * would give you warnings when using well-defined format strings)
+ *
+ * This implementation should work as defined by the specification, so you can
+ * expect every feature of snprintf, including the return value giving you the
+ * theoretical amount of chars necessary for this conversion even if the buffer
+ * you provided isn't large enough for the string to be stored in it (note that
+ * as opposed to the whole conversion, each %* conversion apart has a hard-coded
+ * length limit of 4095 bytes, so attempting to configure a conversion that
+ * exceeds that amount will result in an error being printed out to the buffer)
+ * 
+ * If any conversion error occurs because of bad parameters or flags, a suitable
+ * message will be appended to the buffer and the procedure will return the
+ * negated length of the conversion up to that point, so you can choose whether
+ * to print the string anyway or not
+ *
+ * Extended format specifiers:
+ *   %q, %Q: takes in a b32, b16 or b8 value, outputs `true` or `false`
+ *     (lower/uppercase)
+ *   %v: takes in a CyStringView, outputs its text
+ *   %b: takes in an unsigned int, outputs it in base 2 (binary)
+ *
+ * Explicit-sized integers:
+ *   You can explicitly size any integer input flag by appending its size to it
+ *   (e.g.: %u32, %i64, %b8, etc.) - note that this is incompatible with the
+ *   standard C size specifiers and trying to use both simultaneously will
+ *   result in an error being printed out
+ */
 CY_DEF isize cy_sprintf(
     char *buf, isize size, const char *fmt, ...
 ) CY__FMT_ATTR(3);
 CY_DEF isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va);
-
-CY_DEF char *cy_aprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
-CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
 
 /* =============================== Allocators =============================== */
 typedef enum {
@@ -551,6 +635,17 @@ CY_DEF CyAllocator cy_heap_allocator(void);
 #define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
 #define cy_heap_free(ptr) cy_free(cy_heap_allocator(), ptr)
 
+/* ------------------------ Static Allocator Section ------------------------ */
+typedef struct {
+    void *start; 
+    isize size; 
+} CyStaticBuf;
+
+CY_DEF CyAllocatorProc cy_static_allocator_proc;
+CY_DEF CyAllocator cy_static_allocator(CyStaticBuf *buf);
+
+CY_DEF CyStaticBuf cy_static_buf_init(void *backing_buf, isize size);
+
 /* ------------------------- Page Allocator Section ------------------------- */
 // TODO(cya): query for page size at runtime
 #if defined(CY_OS_WINDOWS)
@@ -599,6 +694,7 @@ typedef struct {
 
 CY_DEF CyAllocatorProc cy_arena_allocator_proc;
 CY_DEF CyAllocator cy_arena_allocator(CyArena *arena);
+
 CY_DEF CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size);
 CY_DEF CyArena cy_arena_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_arena_deinit(CyArena *arena);
@@ -626,10 +722,6 @@ typedef struct {
     isize padding;
 } CyStackHeader;
 
-/* Default initial size set to one page */
-#define CY_STACK_INIT_SIZE     0x4000
-#define CY_STACK_GROWTH_FACTOR 2.0
-
 CY_DEF CyAllocatorProc cy_stack_allocator_proc;
 CY_DEF CyAllocator cy_stack_allocator(CyStack *stack);
 
@@ -638,37 +730,35 @@ CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_stack_deinit(CyStack *stack);
 
 /* ------------------------- Pool Allocator Section ------------------------- */
-typedef struct CyPoolFreeNode {
-    struct CyPoolFreeNode *next;
-} CyPoolFreeNode;
-
 typedef struct {
-    u8 *buf;
-    isize len;
+    CyAllocator backing;
+    void *memory;
+    void *free_list_head;
+    isize chunks;
     isize chunk_size;
-
-    CyPoolFreeNode *head;
+    isize chunk_align;
 } CyPool;
 
 CY_DEF CyAllocatorProc cy_pool_allocator_proc;
 CY_DEF CyAllocator cy_pool_allocator(CyPool *pool);
 
-CY_DEF CyPool cy_pool_init(
-    void *backing_buf, isize size, isize chunk_size, isize chunk_align
+CY_DEF CyPool cy_pool_init(CyAllocator backing, isize chunks, isize chunk_size);
+CY_DEF CyPool cy_pool_init_align(
+    CyAllocator backing, isize chunks, isize chunk_size, isize chunk_align
 );
+CY_DEF void cy_pool_deinit(CyPool *pool);
 
 // TODO(cya):
-// * add new behaviors to arena/stack allocators:
-//   (page expansion, static backing buffers and scratch memory (ring bufs))
-// * virtual memory allocator (includes commit and reserve helper functions)
-// * bump allocator
-// * bitmap allocator
-// * pool allocator
+// * discover a nice interace to implement different OOM handling behaviors to
+// * the basic allocators (static buf, linked list and pre-reserve/commit)
+// * scratch allocator (ring buffer arena)
 // * free-list allocator
 // * buddy allocator
-// * extra allocator strategies from: https://www.youtube.com/watch?v=LIb3L4vKZ7U
+// * bitmap allocator ([bitmap of free blocks][contiguous pool of memory...])
+// * virtual memory allocator (includes commit and reserve helper functions)
+// * extra allocator strategies from https://www.youtube.com/watch?v=LIb3L4vKZ7U
 // * general-purpose heap allocator composed of the basic ones to replace malloc
-
+//   (final boss i guess - maybe implement one like TCMalloc?)
 
 /* ============================== Char procs ================================ */
 CY_DEF const char *cy_char_first_occurence(const char *str, char c);
@@ -855,7 +945,7 @@ CY_DEF isize cy_utf8_codepoints(const char *str);
 
 #endif // CY__H_INCLUDE
 
-#ifdef CY_IMPLEMENTATION
+#if defined(CY_IMPLEMENTATION)
 #undef CY_IMPLEMENTATION
 
 /******************************************************************************
@@ -883,6 +973,11 @@ void cy_handle_assertion(
 
     cy_eprintf("\n");
 }
+
+// TODO(cya): remove header and implement mem functions
+#ifndef CY_OS_WINDOWS
+    #include <string.h>
+#endif
 
 inline void *cy_mem_copy(
     void *restrict dst, const void *restrict src, isize bytes
@@ -1093,7 +1188,7 @@ cy_internal CY_FILE_OPEN_PROC(cy__win32_file_open)
         creation_disposition, FILE_ATTRIBUTE_NORMAL, NULL
     );
 
-    cy_free(a, filename_16);
+    cy_string_16_free(filename_16);
     if (handle == INVALID_HANDLE_VALUE) {
         switch (GetLastError()) {
         case ERROR_FILE_NOT_FOUND: {
@@ -1104,7 +1199,7 @@ cy_internal CY_FILE_OPEN_PROC(cy__win32_file_open)
             return CY_FILE_ERROR_EXISTS;
         } break;
         case ERROR_ACCESS_DENIED: {
-            return CY_FILE_ERROR_NO_PERMISSION;
+            return CY_FILE_ERROR_ACCESS_DENIED;
         } break;
         default: {
             return CY_FILE_ERROR_INVALID;
@@ -1175,6 +1270,39 @@ cy_internal CY_FILE_SEEK_PROC(cy__win32_file_seek)
 cy_internal CY_FILE_CLOSE_PROC(cy__win32_file_close)
 {
     CloseHandle(fd.p);
+}
+
+inline const char *cy_file_error_as_str(CyFileError err)
+{
+    const char *str = "";
+    switch (err) {
+    case CY_FILE_ERROR_OUT_OF_MEMORY: {
+        str = "out of memory";
+    } break;
+    case CY_FILE_ERROR_NONE: {
+        str = "success";
+    } break;
+    case CY_FILE_ERROR_INVALID: {
+        str = "invalid handle";
+    } break;
+    case CY_FILE_ERROR_INVALID_FILENAME: {
+        str = "invalid filename";
+    } break;
+    case CY_FILE_ERROR_EXISTS: {
+        str = "already exists";
+    } break;
+    case CY_FILE_ERROR_NOT_FOUND: {
+        str = "not found";
+    } break;
+    case CY_FILE_ERROR_ACCESS_DENIED: {
+        str = "access denied";
+    } break;
+    case CY_FILE_ERROR_TRUNCATION_FAILED: {
+        str = "truncation failed";
+    } break;
+    }
+
+    return str;
 }
 
 CyFile *cy_file_get_std_handle(CyFileStdType type)
@@ -1573,6 +1701,40 @@ inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
     }
 
     return len;
+}
+
+inline char *cy_aprintf(CyAllocator a, const char *fmt, ...)
+{
+    va_list va;
+    va_start(va, fmt);
+    char *res = cy_aprintf_va(a, fmt, va);
+    va_end(va);
+
+    return res;
+}
+
+inline char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va)
+{
+    isize init_size = 4096;
+    char *buf = cy_alloc(a, init_size);
+    isize len = cy_sprintf_va(buf, init_size, fmt, va);
+    if (len < 0) {
+        len = -len;
+    }
+
+    isize new_size = len + 1;
+    char *new_buf = cy_resize(a, buf, init_size, new_size);
+    if (new_buf == NULL) {
+        cy_free(a, buf);
+        return NULL;
+    }
+
+    buf = new_buf;
+    if (new_size > init_size) {
+        cy_sprintf_va(buf, new_size, fmt, va);
+    }
+
+    return buf;
 }
 
 inline isize cy_sprintf(char *buf, isize size, const char *fmt, ...)
@@ -2244,38 +2406,6 @@ cy_global const char *cy__b32_to_str_table[4] = {
 };
 #endif
 
-/* Extended implementation of the snprintf function from the C99 standard 
- * (no sprintf without a buffer size parameter because that'd be a bit silly)
- * NOTE: you can disable the extended formats by defining CY_STD_C_PRINTF
- * (you'll additionally get the compiler warnings for the format string in case
- * your compiler supports them, since enabling this with the extended version
- * would give you warnings when using well-defined format strings)
- *
- * This implementation should work as defined by the specification, so you can
- * expect every feature of snprintf, including the return value giving you the
- * theoretical amount of chars necessary for this conversion even if the buffer
- * you provided isn't large enough for the string to be stored in it (note that
- * as opposed to the whole conversion, each %* conversion apart has a hard-coded
- * length limit of 4095 bytes, so attempting to configure a conversion that
- * exceeds that amount will result in an error being printed out to the buffer)
- * 
- * If any conversion error occurs because of bad parameters or flags, a suitable
- * message will be appended to the buffer and the procedure will return the
- * negated length of the conversion up to that point, so you can choose whether
- * to print the string anyway or not
- *
- * Extended format specifiers:
- *   %q, %Q: takes in a b32, b16 or b8 value, outputs `true` or `false`
- *     (lower/uppercase)
- *   %v: takes in a CyStringView, outputs its text
- *   %b: takes in an unsigned int, outputs it in base 2 (binary)
- *
- * Explicit-sized integers:
- *   You can explicitly size any integer input flag by appending its size to it
- *   (e.g.: %u32, %i64, %b8, etc.) - note that this is incompatible with the
- *   standard C size specifiers and trying to use both simultaneously will
- *   result in an error being printed out
- */
 isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 {
     // NOTE(cya): written_total is how much _would_ be written in case the buf
@@ -2767,40 +2897,6 @@ fmt_copy_buf:
     return err ? -written_total : written_total;
 }
 
-inline char *cy_aprintf(CyAllocator a, const char *fmt, ...)
-{
-    va_list va;
-    va_start(va, fmt);
-    char *res = cy_aprintf_va(a, fmt, va);
-    va_end(va);
-
-    return res;
-}
-
-inline char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va)
-{
-    isize init_size = 4096;
-    char *buf = cy_alloc(a, init_size);
-    isize len = cy_sprintf_va(buf, init_size, fmt, va);
-    if (len < 0) {
-        len = -len;
-    }
-
-    isize new_size = len + 1;
-    char *new_buf = cy_resize(a, buf, init_size, new_size);
-    if (new_buf == NULL) {
-        cy_free(a, buf);
-        return NULL;
-    }
-
-    buf = new_buf;
-    if (new_size > init_size) {
-        cy_sprintf_va(buf, new_size, fmt, va);
-    }
-
-    return buf;
-}
-
 /* =============================== Allocators =============================== */
 inline void *cy_alloc_align(CyAllocator a, isize size, isize align)
 {
@@ -2945,7 +3041,7 @@ inline CyAllocator cy_heap_allocator(void)
     };
 }
 
-#ifdef CY_OS_WINDOWS
+#if defined(CY_OS_WINDOWS)
     #include <malloc.h>
 
     #define malloc_align(s, a) _aligned_malloc((usize)s, (usize)a)
@@ -2953,7 +3049,7 @@ inline CyAllocator cy_heap_allocator(void)
         _aligned_realloc(mem, (usize)new_size, (usize)align)
     #define free_align(p, a) _aligned_free(p)
 #else
-extern int posix_memalign(void **, size_t, size_t);
+extern int posix_memalign(void**, size_t, size_t);
 
 void *malloc_align(isize size, isize align)
 {
@@ -3004,6 +3100,54 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
     }
 
     return ptr;
+}
+
+/* ------------------------ Static Allocator Section ------------------------ */
+inline CyAllocator cy_static_allocator(CyStaticBuf *buf)
+{
+    return (CyAllocator){
+        .proc = cy_static_allocator_proc,
+        .data = buf,
+    };
+}
+
+inline CyStaticBuf cy_static_buf_init(void *backing_buf, isize size)
+{
+    return (CyStaticBuf){
+        .start = backing_buf,
+        .size = size,
+    };
+}
+
+CY_ALLOCATOR_PROC(cy_static_allocator_proc)
+{
+    CY_UNUSED(align);
+    CY_UNUSED(old_mem);
+    CY_UNUSED(old_size);
+
+    CyStaticBuf *buf = allocator_data;
+    void *ptr = NULL;
+    switch (type) {
+    case CY_ALLOCATION_ALLOC: {
+        CY_ASSERT_MSG(
+            size == buf->size,
+            "static_allocator: allocation size differs from buffer size"
+        );
+    } // NOTE(cya): fallthrough
+    case CY_ALLOCATION_ALLOC_ALL: {
+        ptr = buf->start;
+        if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
+            cy_mem_zero(ptr, size);
+        }
+    } break;
+    case CY_ALLOCATION_FREE: 
+    case CY_ALLOCATION_FREE_ALL: 
+    case CY_ALLOCATION_RESIZE: {
+        CY_ASSERT_MSG(false, "static allocator: unsupported operation");
+    } break;
+    }
+
+    return ptr;   
 }
 
 /* ------------------------- Page Allocator Section ------------------------- */
@@ -3067,6 +3211,7 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
         CY_ASSERT(ptr == cy_align_ptr_forward(ptr, align));
     } break;
     case CY_ALLOCATION_ALLOC_ALL: {
+        CY_ASSERT_MSG(false, "page allocator: unsupported operation");
     } break;
     case CY_ALLOCATION_FREE: {
         CyPageChunk *chunk = (CyPageChunk*)old_mem - 1;
@@ -3337,6 +3482,14 @@ inline CyAllocator cy_stack_allocator(CyStack *stack)
     };
 }
 
+#ifndef CY_STACK_INIT_SIZE
+    #define CY_STACK_INIT_SIZE CY_PAGE_SIZE
+#endif
+
+#ifndef CY_STACK_GROWTH_FACTOR
+    #define CY_STACK_GROWTH_FACTOR 2.0
+#endif
+
 inline CyStackNode *cy_stack_insert_node(CyStack *stack, isize size)
 {
     CY_VALIDATE_PTR(stack);
@@ -3575,26 +3728,122 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
 }
 
 /* ------------------------- Pool Allocator Section ------------------------- */
-#if 0
-inline CyPool cy_pool_init(
-    void *backing_buf, isize size, isize chunk_size, isize chunk_align
-) {
-    u8 *start = backing_buf;
-    u8 *aligned_start = cy_align_ptr_forward(backing_buf, chunk_align);
-    isize backing_buf_size = aligned_start - start;
-
-    return (CyPool){
-        .buf = aligned_start,
-        .len = backing_buf_size,
-        .chunk_size = 0,
+inline CyAllocator cy_pool_allocator(CyPool *pool)
+{
+    return (CyAllocator){
+        .proc = cy_pool_allocator_proc,
+        .data = pool,
     };
+}
+
+
+inline CyPool cy_pool_init(CyAllocator backing, isize chunks, isize chunk_size)
+{
+    return cy_pool_init_align(
+        backing, chunks, chunk_size, CY_DEFAULT_ALIGNMENT
+    );
+}
+
+inline CyPool cy_pool_init_align(
+    CyAllocator backing, isize chunks, isize chunk_size, isize chunk_align
+) {
+    CyPool pool = {0};
+    if (chunk_size < cy_sizeof(uintptr)) {
+        CY_ASSERT_MSG(false, "pool allocator: chunk size is too small");
+        return pool;
+    }
+    
+    isize chunk_size_total = chunk_size + chunk_align;
+    isize buf_size = chunks * chunk_size_total;
+    void *buf = cy_alloc_align(backing, buf_size, chunk_align);
+    if (buf == NULL) {
+        buf_size = 0;
+        chunk_size = 0;        
+    }
+    
+    pool = (CyPool){
+        .backing = backing,
+        .memory = buf,
+        .free_list_head = buf,
+        .chunks = chunks,
+        .chunk_size = chunk_size,
+        .chunk_align = chunk_align,
+    };
+    CyAllocator a = cy_pool_allocator(&pool);
+    cy_free_all(a);
+   
+    return pool;
+}
+
+inline void cy_pool_deinit(CyPool *pool)
+{
+    if (pool == NULL) {
+        return;
+    }
+
+    cy_free(pool->backing, pool->memory);
+    cy_mem_set(pool, 0, cy_sizeof(*pool));
 }
 
 CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
 {
-    return NULL;
+    CY_UNUSED(old_size);
+
+    CyPool *pool = allocator_data;
+    void *ptr = NULL;
+    switch (type) {
+    case CY_ALLOCATION_ALLOC: {
+        CY_ASSERT(size == pool->chunk_size);
+        CY_ASSERT(align == pool->chunk_align);
+        CY_ASSERT_MSG(
+            pool->free_list_head != NULL, "pool allocator: out of memory"
+        );
+        
+        ptr = pool->free_list_head;
+        
+        uintptr *next_free = (uintptr*)pool->free_list_head;
+        pool->free_list_head = (void*)next_free;
+        if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
+            cy_mem_zero(ptr, size);
+        }
+    } break;
+    case CY_ALLOCATION_FREE: {
+        if (old_mem == NULL) {
+            break;
+        }
+            
+        isize chunk_size_total = pool->chunk_size + pool->chunk_align;
+        isize pool_size = pool->chunks * chunk_size_total;
+        void *pool_end = (void*)((uintptr)pool->memory + (uintptr)pool_size);
+        if (old_mem < pool->memory || old_mem > pool_end) {
+            CY_ASSERT_MSG(false, "pool allocator: out-of-bounds free");
+            break;
+        }
+
+        uintptr *next_free = (uintptr*)old_mem;
+        *next_free = (uintptr)pool->free_list_head;
+        pool->free_list_head = (void*)next_free;
+    } break;
+    case CY_ALLOCATION_FREE_ALL: {
+        isize chunk_size_total = pool->chunk_size + pool->chunk_align;
+        void *cur_chunk = pool->memory;
+        for (isize i = 0; i < pool->chunks - 1; i++) {
+            uintptr *next = (uintptr*)cur_chunk;
+            *next = (uintptr)cur_chunk + (uintptr)chunk_size_total;
+            cur_chunk = (void*)(*next);
+        }
+
+        uintptr *end = (uintptr*)cur_chunk;
+        *end = (uintptr)NULL; // NOTE(cya): free list tail
+    } break;
+    case CY_ALLOCATION_ALLOC_ALL: 
+    case CY_ALLOCATION_RESIZE: {
+        CY_ASSERT_MSG(false, "pool allocator: unsupported operation");
+    } break;
+    }
+
+    return ptr;   
 }
-#endif
 
 /* ============================== Char procs =============================== */
 const char *cy_char_first_occurence(const char *str, char c)

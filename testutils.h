@@ -1,8 +1,6 @@
 #ifndef _TEST_UTILS_H
 #define _TEST_UTILS_H
 
-#include <errno.h>
-
 #define KB 1024.0
 
 #define VT_BOLD "\x1B[1m"
@@ -13,8 +11,8 @@
 #define SP "[" VT_FG_GREEN "🗸" VT_RESET "] "
 #define EP "[" VT_FG_RED "🗙" VT_RESET "] "
 
-#define print_s(...) printf(SP "Success: " __VA_ARGS__); putchar('\n')
-#define print_e(...) printf(EP "Failure: " __VA_ARGS__); putchar('\n')
+#define print_s(...) cy_printf(SP "Success: " __VA_ARGS__); cy_printf("\n")
+#define print_e(...) cy_printf(EP "Failure: " __VA_ARGS__); cy_printf("\n")
 
 #define TEST_ASSERT(cond, ...) { \
     if (!(cond)) { \

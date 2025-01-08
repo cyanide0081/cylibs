@@ -7,18 +7,17 @@ static i32 exit_code;
 
 static void test_page_allocator(void)
 {
-    printf("%sTesting Page Allocator...%s\n", VT_BOLD, VT_RESET);
+    cy_printf("%sTesting Page Allocator...%s\n", VT_BOLD, VT_RESET);
 
-    FILE *f = fopen("sample.txt", "r");
-    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
+    CyFile f = {0};
+    CyFileError err = cy_file_open(&f, "sample.txt");
+    TEST_ASSERT(err == 0, "unable to open file: %s", cy_file_error_as_str(err));
 
-    fseek(f, 0, SEEK_END);
-    size_t txt_len = ftell(f);
-    rewind(f);
+    isize txt_len = cy_file_size(&f);
 
     CyAllocator a = cy_page_allocator();
 
-    size_t txt_size = txt_len + 1;
+    isize txt_size = txt_len + 1;
     char *txt_buf = cy_alloc(a, txt_size);
     print_s("allocated page");
 
@@ -28,14 +27,15 @@ static void test_page_allocator(void)
     );
     print_s("validated memory alignment");
 
-    fread(txt_buf, sizeof(u8), txt_len, f);
+    cy_file_read(&f, txt_buf, txt_len);
+    cy_file_close(&f);
     print_s("allocated message (%.2lfKB) (page size: %.2lfKB)",
         txt_len / KB, cy_page_allocator_alloc_size(txt_buf) / KB);
 
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x80);
         TEST_ASSERT_NOT_NULL(
-            new_buf, "unable to shrink page size: %s", strerror(errno)
+            new_buf, "unable to shrink page size: %s", cy_file_error_as_str(err)
         );
 
         txt_buf = new_buf;
@@ -45,7 +45,7 @@ static void test_page_allocator(void)
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x100000);
         TEST_ASSERT_NOT_NULL(
-            new_buf, "unable to expand page size: %s", strerror(errno)
+            new_buf, "unable to expand page size: %s", cy_file_error_as_str(err)
         );
 
         txt_buf = new_buf;
@@ -62,19 +62,17 @@ static void test_page_allocator(void)
 
     cy_free(a, txt_buf);
     print_s("deallocated page");
-    fclose(f);
 }
 
 static void test_arena_allocator(void)
 {
-    printf("%sTesting Arena Allocator...%s\n", VT_BOLD, VT_RESET);
+    cy_printf("%sTesting Arena Allocator...%s\n", VT_BOLD, VT_RESET);
 
-    FILE *f = fopen("sample.txt", "r");
-    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
+    CyFile f = {0};
+    CyFileError err = cy_file_open(&f, "sample.txt");
+    TEST_ASSERT(err == 0, "unable to open file: %s", cy_file_error_as_str(err));
 
-    fseek(f, 0, SEEK_END);
-    isize txt_len = ftell(f);
-    rewind(f);
+    isize txt_len = cy_file_size(&f);
 
     CyArena arena = cy_arena_init(cy_heap_allocator(), 0x4000);
     CyAllocator a = cy_arena_allocator(&arena);
@@ -82,8 +80,8 @@ static void test_arena_allocator(void)
 
     isize txt_size = txt_len + 1;
     char *txt_buf = cy_alloc_align(a, txt_size, 1);
-    fread(txt_buf, sizeof(char), txt_len, f);
-    fclose(f);
+    cy_file_read(&f, txt_buf, txt_len);
+    cy_file_close(&f);
     print_s(
         "allocated buffer storing file contents (%.2lfKB)",
         (txt_len + 1) / KB
@@ -97,7 +95,7 @@ static void test_arena_allocator(void)
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
     {
-        size_t shrunk_size = expanded_size / 4;
+        isize shrunk_size = expanded_size / 4;
         txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
         TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in arena");
 
@@ -148,14 +146,13 @@ static void test_arena_allocator(void)
 
 static void test_stack_allocator(void)
 {
-    printf("%sTesting Stack Allocator...%s\n", VT_BOLD, VT_RESET);
+    cy_printf("%sTesting Stack Allocator...%s\n", VT_BOLD, VT_RESET);
 
-    FILE *f = fopen("sample.txt", "r");
-    TEST_ASSERT_NOT_NULL(f, "unable to open file: %s", strerror(errno));
+    CyFile f = {0};
+    CyFileError err = cy_file_open(&f, "sample.txt");
+    TEST_ASSERT(err == 0, "unable to open file: %s", cy_file_error_as_str(err));
 
-    fseek(f, 0, SEEK_END);
-    isize txt_len = ftell(f);
-    rewind(f);
+    isize txt_len = cy_file_size(&f);
 
     CyStack stack = cy_stack_init(cy_heap_allocator(), 0x4000);
     CyAllocator a = cy_stack_allocator(&stack);
@@ -163,8 +160,8 @@ static void test_stack_allocator(void)
 
     isize txt_size = txt_len + 1;
     char *txt_buf = cy_alloc_align(a, txt_size, 1);
-    fread(txt_buf, sizeof(char), txt_len, f);
-    fclose(f);
+    cy_file_read(&f, txt_buf, txt_len);
+    cy_file_close(&f);
     print_s(
         "allocated buffer storing file contents (%.2lfKB)",
         (txt_len + 1) / KB
@@ -178,7 +175,7 @@ static void test_stack_allocator(void)
         print_s("expanded message buffer (%.2lfKB)", expanded_size / KB);
     }
     {
-        size_t shrunk_size = expanded_size / 4;
+        isize shrunk_size = expanded_size / 4;
         txt_buf = cy_resize(a, txt_buf, expanded_size, shrunk_size);
         TEST_ASSERT_NOT_NULL(txt_buf, "unable to shrink buffer in stack");
 
@@ -199,7 +196,7 @@ static void test_stack_allocator(void)
             "hmm.",
         };
         char *buf = NULL;
-        for (isize i = 0; i < CY_STATIC_ARR_LEN(strs); i++) {
+        for (isize i = 0; i < CY_ARRAY_LEN(strs); i++) {
             buf = cy_alloc_string(a, strs[i]);
             print_s("allocated string into stack: '%s'", buf);
         }
@@ -212,9 +209,27 @@ static void test_stack_allocator(void)
     print_s("deinitialized stack");
 }
 
+static void test_pool_allocator(void)
+{
+    cy_printf("%sTesting Pool Allocator...%s\n", VT_BOLD, VT_RESET);
+
+
+    CyPool pool = cy_pool_init(cy_heap_allocator(), 8, cy_sizeof(f64));
+    CyAllocator a = cy_pool_allocator(&pool);
+    print_s("initialized pool");
+
+    f64 *f = cy_alloc_item(a, f64);
+    TEST_ASSERT_NOT_NULL(f, "unable to allocate pool chunk");
+
+    print_s("allocated pool chunk");
+    
+    cy_pool_deinit(&pool);
+    print_s("deinitialized pool");
+}
+
 static void test_cy_strings(void)
 {
-    printf("%sTesting CyStrings...%s\n", VT_BOLD, VT_RESET);
+    cy_printf("%sTesting CyStrings...%s\n", VT_BOLD, VT_RESET);
 
     CyArena arena = cy_arena_init(cy_heap_allocator(), 0x1000);
     CyAllocator a = cy_arena_allocator(&arena);
@@ -292,6 +307,7 @@ int main(void)
     test_page_allocator();
     test_arena_allocator();
     test_stack_allocator();
+    test_pool_allocator();
     test_cy_strings();
 
     return exit_code;
