@@ -222,6 +222,14 @@ static void test_pool_allocator(void)
     TEST_ASSERT_NOT_NULL(f, "unable to allocate pool chunk");
 
     print_s("allocated pool chunk");
+    while (pool.free_list_head != NULL) {
+        f = cy_alloc_item(a, f64);
+    }
+    
+    print_s("exhausted pool");
+
+    cy_free_all(a);
+    print_s("freed all chunks in pool");
     
     cy_pool_deinit(&pool);
     print_s("deinitialized pool");

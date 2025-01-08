@@ -11,8 +11,8 @@ int main(void)
     int written = -1;
     f64 f = 766.3e8;
 
-    int n = 2048;
-    cy_printf("\nbig printf: `%0*d%0*d`\n", n, n, n, n);
+    int n = 2048, w = 6666;
+    cy_printf("\nbig printf: `%0*d`\n", n, w);
 
     char buf[1024];
     isize buf_size = CY_ARRAY_LEN(buf);
@@ -190,10 +190,7 @@ int main(void)
     cy_printf("stringview: `%v`\n", v);
 
     u32 u = 24;
-    cy_printf("sized int: %32", u);
-    cy_printf("\n");
-    cy_printf("long int: %04096u\n", 1);
-    cy_printf("\n");
+    cy_printf("sized int: %32 after-int: %u\n", &u, u);
     cy_printf("zero precision: %.0u\n", 0);
 
     return 0;
