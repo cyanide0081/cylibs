@@ -140,21 +140,7 @@
 #endif
 
 /* ================================= Types ================================== */
-#if defined(CY_COMPILER_MSVC)
-typedef signed __int8 i8;
-typedef signed __int16 i16;
-typedef signed __int32 i32;
-typedef signed __int64 i64;
-
-typedef unsigned __int8 u8;
-typedef unsigned __int16 u16;
-typedef unsigned __int32 u32;
-typedef unsigned __int64 u64;
-
-typedef float f32;
-typedef double f64;
-#else
-    #include <stdint.h>
+#include <stdint.h>
 
 typedef int8_t i8;
 typedef int16_t i16;
@@ -165,7 +151,6 @@ typedef uint8_t u8;
 typedef uint16_t u16;
 typedef uint32_t u32;
 typedef uint64_t u64;
-#endif
 
 CY_STATIC_ASSERT(sizeof(i8) == sizeof(u8));
 CY_STATIC_ASSERT(sizeof(i16) == sizeof(u16));
@@ -183,7 +168,7 @@ typedef double f64;
 CY_STATIC_ASSERT(sizeof(f32) == 4);
 CY_STATIC_ASSERT(sizeof(f64) == 8);
 
-#if defined(CY_OS_UNIX)
+#if defined(CY_OS_UNIX) 
     #include <stddef.h>
 #endif
 
@@ -770,6 +755,7 @@ CY_DEF const char *cy_char_last_occurence(const char *str, char c);
 CY_DEF b32 cy_char_is_digit(char c);
 CY_DEF b32 cy_char_is_hex_digit(char c);
 
+// NOTE(cya): lower/uppercase related procs are ASCII only
 CY_DEF b32 cy_char_is_lower(char c);
 CY_DEF b32 cy_char_is_upper(char c);
 
@@ -777,7 +763,6 @@ CY_DEF b32 cy_char_is_in_set(char c, const char *cut_set);
 
 CY_DEF char cy_char_to_lower(char c);
 CY_DEF char cy_char_to_upper(char c);
-CY_DEF char cy_char_with_case(char c, b32 uppercase);
 
 CY_DEF i64 cy_digit_to_i64(char digit);
 CY_DEF i64 cy_hex_digit_to_i64(char digit);
@@ -951,12 +936,22 @@ CY_DEF isize cy_utf8_codepoints(const char *str);
 
 #endif // CY__H_INCLUDE
 
-#if defined(CY_IMPLEMENTATION)
+#ifdef CY_IMPLEMENTATION
 #undef CY_IMPLEMENTATION
 
 /******************************************************************************
  *                               IMPLEMENTATION                               *
  ******************************************************************************/
+#if defined(CY_COMPILER_MSVC)
+    #pragma warning(push)
+    #pragma warning(disable:4061) // enum cases
+    #pragma warning(disable:4710) // not inlined
+    #pragma warning(disable:5045) // spectre mitigation??
+#elif defined(CY_COMPILER_GCC)
+    #pragma GCC diagnostic push
+    #pragma GCC diagnostic ignored "-Wimplicit-fallthrough" // gcc smh...
+#endif
+
 /* ================================= Runtime ================================ */
 void cy_handle_assertion(
     const char *prefix,
@@ -1674,11 +1669,11 @@ inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
     return len;
 }
 
-#define CY__FMT_CONV_BUF_SIZE 4096
+#define CY__FMT_STATIC_BUF_SIZE 4096
 
 inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
-    char static_buf[CY__FMT_CONV_BUF_SIZE];
+    char static_buf[CY__FMT_STATIC_BUF_SIZE];
     isize static_size = CY_ARRAY_LEN(static_buf);
     isize len = cy_sprintf_va(static_buf, static_size, fmt, va);
 
@@ -1867,7 +1862,7 @@ cy_internal isize cy__scan_i64(const char *str, i32 base, i64 *value)
 cy_global const char cy__num_to_char_table_upper[] = "0123456789ABCDEF";
 cy_global const char cy__num_to_char_table_lower[] = "0123456789abcdef";
 
-cy_internal char cy__fmt_get_base_char(i32 base)
+cy_internal inline char cy__fmt_get_base_char(i32 base)
 {
     switch (base) {
     case 2: {
@@ -1879,6 +1874,11 @@ cy_internal char cy__fmt_get_base_char(i32 base)
     }
 
     return '?';
+}
+
+cy_internal inline char cy__fmt_char_to_case(char c, b32 uppercase)
+{
+    return uppercase ? cy_char_to_upper(c) : c;
 }
 
 #define CY__PRINT_PROC(name) \
@@ -1959,7 +1959,7 @@ cy_internal CY__PRINT_PROC(cy__print_u64)
         case 16: {
             if (written < limit) {
                 char p = cy__fmt_get_base_char(base);
-                *c++ = cy_char_with_case(p, style_upper);
+                *c++ = cy__fmt_char_to_case(p, style_upper);
                 written += 1;
             }
 
@@ -2279,7 +2279,7 @@ cy_internal CY__PRINT_PROC(cy__print_f64)
 
     // NOTE(cya): because 'significant digits' includes integral part
     if (style_auto) {
-        precision -= integral_len;
+        precision -= (i32)integral_len;
     }
 
     f64 remainder = (n - (f64)integral);
@@ -2361,7 +2361,7 @@ cy_internal CY__PRINT_PROC(cy__print_f64)
         (style_exp || style_hex || (exponent != 0));
     if (print_exponent) {
         char c = style_hex ? 'p' : 'e';
-        c = cy_char_with_case(c, upper);
+        c = cy__fmt_char_to_case(c, upper);
         if (written < limit) {
             *cur++ = c;
             written += 1;
@@ -2436,7 +2436,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
     isize written_total = 0;
     isize written = 0;
     
-    char conv_buf_static[CY__FMT_CONV_BUF_SIZE];
+    char conv_buf_static[CY__FMT_STATIC_BUF_SIZE];
     isize conv_cap_static = CY_ARRAY_LEN(conv_buf_static) - 1;
     char *conv_buf_heap = NULL;
     isize conv_cap_heap = 0;
@@ -3448,7 +3448,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
         }
 
         CyArenaNode *cur_node = arena->state.first_node;
-        isize prev_offset;
+        isize prev_offset = 0;
         b32 is_in_range = false, found_node = false;
         while (cur_node != NULL) {
             is_in_range = (u8*)old_mem >= cur_node->buf &&
@@ -3940,11 +3940,6 @@ inline char cy_char_to_upper(char c) {
     return cy_char_is_lower(c) ? c - ('a' - 'A') : c;
 }
 
-inline char cy_char_with_case(char c, b32 uppercase)
-{
-    return uppercase ? cy_char_to_upper(c) : c;
-}
-
 inline i64 cy_digit_to_i64(char digit)
 {
     return cy_char_is_digit(digit) ? digit - '0' : digit - 'W';
@@ -4286,7 +4281,7 @@ isize cy_str_parse_f32(f32 n, char *dst)
 typedef struct {
     u32 integral;
     u32 decimal;
-    i16 exponent;
+    i32 exponent;
 } CyPrivFloatParts;
 
 cy_internal inline i16 cy__f64_normalize_decimal(f64 *val)
@@ -5159,5 +5154,11 @@ inline isize cy_utf8_codepoints(const char *str)
 
     return count;
 }
+
+#if defined(CY_COMPILER_MSVC)
+    #pragma warning(pop)
+#elif defined(CY_COMPILER_GCC)
+    #pragma GCC diagnostic pop
+#endif
 
 #endif // CY_IMPLEMENTATION
