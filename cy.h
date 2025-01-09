@@ -638,7 +638,7 @@ CY_DEF CyAllocator cy_heap_allocator(void);
 #define cy_heap_alloc(size) cy_alloc(cy_heap_allocator(), size)
 #define cy_heap_free(ptr) cy_free(cy_heap_allocator(), ptr)
 
-/* ------------------------ Static Allocator Section ------------------------ */
+/* ---------------------------- Static Allocator ---------------------------- */
 typedef struct {
     void *start; 
     isize size; 
@@ -649,20 +649,20 @@ CY_DEF CyAllocator cy_static_allocator(CyStaticBuf *buf);
 
 CY_DEF CyStaticBuf cy_static_buf_init(void *backing_buf, isize size);
 
-/* ------------------------- Page Allocator Section ------------------------- */
+/* ----------------------------- Page Allocator ----------------------------- */
 // TODO(cya): query for page size at runtime
 #if defined(CY_OS_WINDOWS)
-    #define CY_PAGE_SIZE (4 * 1024)
+    #define CY_DEFAULT_PAGE_SIZE 4096
 #else
     #include <sys/mman.h>
-    #ifndef MAP_ANONYMOUS
+    #if !defined(MAP_ANONYMOUS) && defined(MAP_ANON)
         #define MAP_ANONYMOUS MAP_ANON
     #endif
 
     #if defined(CY_OS_MACOSX)
-        #define CY_PAGE_SIZE (16 * 1024)
+        #define CY_DEFAULT_PAGE_SIZE 16384
     #else
-        #define CY_PAGE_SIZE (4 * 1024)
+        #define CY_DEFAULT_PAGE_SIZE 4096
     #endif
 #endif
 
@@ -677,7 +677,7 @@ CY_DEF CyAllocator cy_page_allocator(void);
 // NOTE(cya): size of actual usable memory starting at *ptr
 CY_DEF isize cy_page_allocator_alloc_size(void *ptr);
 
-/* ------------------------ Arena Allocator Section ------------------------- */
+/* ---------------------------- Arena Allocator ----------------------------- */
 typedef struct CyArenaNode {
     u8 *buf;                  // actual arena memory
     isize size;               // size of the buffer in bytes
@@ -702,7 +702,7 @@ CY_DEF CyArenaNode *cy_arena_insert_node(CyArena *arena, isize size);
 CY_DEF CyArena cy_arena_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_arena_deinit(CyArena *arena);
 
-/* ------------------------- Stack Allocator Section ------------------------ */
+/* ----------------------------- Stack Allocator ---------------------------- */
 typedef struct CyStackNode {
     u8 *buf;
     isize size;
@@ -732,7 +732,7 @@ CY_DEF CyStackNode *cy_stack_insert_node(CyStack *stack, isize size);
 CY_DEF CyStack cy_stack_init(CyAllocator backing, isize initial_size);
 CY_DEF void cy_stack_deinit(CyStack *stack);
 
-/* ------------------------- Pool Allocator Section ------------------------- */
+/* ----------------------------- Pool Allocator ----------------------------- */
 typedef struct {
     CyAllocator backing;
     void *memory;
@@ -795,6 +795,9 @@ CY_DEF b32 cy_str_has_prefix(const char *str, const char *prefix);
 
 CY_DEF char *cy_str_reverse(char *str);
 CY_DEF char *cy_str_reverse_n(char *str, isize len);
+
+CY_DEF void cy_str_to_lower(char *str);
+CY_DEF void cy_str_to_upper(char *str);
 
 CY_DEF u64 cy_str_to_u64(const char *str, i32 base, isize *len_out);
 CY_DEF i64 cy_str_to_i64(const char *str, i32 base, isize *len_out);
@@ -2168,7 +2171,6 @@ cy_internal CY__PRINT_PROC(cy__print_f64)
     isize written_total = 0;
 
     b32 upper = info.flags & CY__FMT_STYLE_UPPER;
-    // isize remaining = cap;
     char *cur = dst;
     if (CY_IS_NAN(n)) {
         info.value.s = cy_string_view_create_c(upper ? "NAN" : "nan");
@@ -3132,7 +3134,7 @@ CY_ALLOCATOR_PROC(cy_heap_allocator_proc)
     return ptr;
 }
 
-/* ------------------------ Static Allocator Section ------------------------ */
+/* ---------------------------- Static Allocator ---------------------------- */
 inline CyAllocator cy_static_allocator(CyStaticBuf *buf)
 {
     return (CyAllocator){
@@ -3177,7 +3179,7 @@ CY_ALLOCATOR_PROC(cy_static_allocator_proc)
     return ptr;   
 }
 
-/* ------------------------- Page Allocator Section ------------------------- */
+/* ----------------------------- Page Allocator ----------------------------- */
 CyAllocator cy_page_allocator(void)
 {
     return (CyAllocator){
@@ -3207,7 +3209,7 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
         isize chunk_padding = cy_sizeof(CyPageChunk) + align;
         isize alloc_size = size + align;
         isize total_size = cy_align_forward(
-            chunk_padding + alloc_size, CY_PAGE_SIZE
+            chunk_padding + alloc_size, CY_DEFAULT_PAGE_SIZE
         );
 
         void *mem = NULL;
@@ -3261,11 +3263,11 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
 
         isize cur_total_size = chunk->size;
         isize new_total_size = cy_align_forward(
-            chunk_padding + size + align, CY_PAGE_SIZE
+            chunk_padding + size + align, CY_DEFAULT_PAGE_SIZE
         );
         if (new_total_size <= cur_total_size) {
             isize size_to_free = cur_total_size - new_total_size;
-            if (size_to_free >= CY_PAGE_SIZE) {
+            if (size_to_free >= CY_DEFAULT_PAGE_SIZE) {
                 u8 *region_to_free = (u8*)cur_start + new_total_size;
 
 #if defined(CY_OS_WINDOWS)
@@ -3299,7 +3301,7 @@ CY_ALLOCATOR_PROC(cy_page_allocator_proc)
     return ptr;
 }
 
-/* ------------------------ Arena Allocator Section ------------------------- */
+/* ---------------------------- Arena Allocator ----------------------------- */
 inline CyAllocator cy_arena_allocator(CyArena *arena)
 {
     return (CyAllocator){
@@ -3309,7 +3311,7 @@ inline CyAllocator cy_arena_allocator(CyArena *arena)
 }
 
 #ifndef CY_ARENA_INIT_SIZE
-    #define CY_ARENA_INIT_SIZE CY_PAGE_SIZE
+    #define CY_ARENA_INIT_SIZE CY_DEFAULT_PAGE_SIZE
 #endif
 
 #ifndef CY_ARENA_GROWTH_FACTOR
@@ -3500,7 +3502,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
     return ptr;
 }
 
-/* -------------------------Stack Allocator Section ------------------------- */
+/* -----------------------------Stack Allocator ----------------------------- */
 inline CyAllocator cy_stack_allocator(CyStack *stack)
 {
     return (CyAllocator){
@@ -3510,7 +3512,7 @@ inline CyAllocator cy_stack_allocator(CyStack *stack)
 }
 
 #ifndef CY_STACK_INIT_SIZE
-    #define CY_STACK_INIT_SIZE CY_PAGE_SIZE
+    #define CY_STACK_INIT_SIZE CY_DEFAULT_PAGE_SIZE
 #endif
 
 #ifndef CY_STACK_GROWTH_FACTOR
@@ -3754,7 +3756,7 @@ CY_ALLOCATOR_PROC(cy_stack_allocator_proc)
     return ptr;
 }
 
-/* ------------------------- Pool Allocator Section ------------------------- */
+/* ----------------------------- Pool Allocator ----------------------------- */
 inline CyAllocator cy_pool_allocator(CyPool *pool)
 {
     return (CyAllocator){
@@ -4098,6 +4100,28 @@ inline char *cy_str_reverse_n(char *str, isize len)
     }
 
     return str;
+}
+
+inline void cy_str_to_lower(char *str)
+{
+    if (str == NULL) {
+        return;
+    }
+    
+    for (; *str != '\0'; str++) {
+        *str = cy_char_to_lower(*str);
+    }
+}
+
+inline void cy_str_to_upper(char *str)
+{
+    if (str == NULL) {
+        return;
+    }
+    
+    for (; *str != '\0'; str++) {
+        *str = cy_char_to_upper(*str);
+    }
 }
 
 u64 cy_str_to_u64(const char *str, i32 base, isize *len_out)
