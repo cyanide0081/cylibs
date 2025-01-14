@@ -15,11 +15,11 @@ static void test_page_allocator(void)
 
     isize txt_len = cy_file_size(&f);
 
-    CyAllocator a = cy_page_allocator();
+    CyAllocator a = cy_virtual_memory_allocator();
 
     isize txt_size = txt_len + 1;
     char *txt_buf = cy_alloc(a, txt_size);
-    print_s("allocated page");
+    print_s("allocated virtual memory");
 
     TEST_ASSERT(
         (uintptr)txt_buf % CY_DEFAULT_ALIGNMENT == 0,
@@ -29,8 +29,7 @@ static void test_page_allocator(void)
 
     cy_file_read(&f, txt_buf, txt_len);
     cy_file_close(&f);
-    print_s("allocated message (%.2lfKB) (page size: %.2lfKB)",
-        txt_len / KB, cy_page_allocator_alloc_size(txt_buf) / KB);
+    print_s("allocated message (%.2lfKB)", txt_len / KB);
 
     {
         void *new_buf = cy_resize(a, txt_buf, txt_size, 0x80);
@@ -50,18 +49,16 @@ static void test_page_allocator(void)
 
         txt_buf = new_buf;
         txt_size = 0x100000;
-        print_s("expanded page size (%.2lfkB)",
-            cy_page_allocator_alloc_size(txt_buf) / KB);
+        print_s("expanded page size (%.2lfkB)", txt_size / KB);
     }
     {
         u8 val = 69;
-        isize page_size = cy_page_allocator_alloc_size(txt_buf);
-        cy_mem_set(txt_buf, val, page_size);
-        print_s("wrote [%u] to page (%.2lfKB)", val, page_size / KB);
+        cy_mem_set(txt_buf, val, txt_size);
+        print_s("wrote [%u] to page (%.2lfKB)", val, txt_size / KB);
     }
 
     cy_free(a, txt_buf);
-    print_s("deallocated page");
+    print_s("deallocated virtual memory");
 }
 
 static void test_arena_allocator(void)
@@ -104,24 +101,24 @@ static void test_arena_allocator(void)
     {
         cy_free_all(a);
         TEST_ASSERT(
-            arena.state.first_node->offset == 0, "unexpected arena offset"
+            arena.cur_block->offset == 0, "unexpected arena offset"
         );
-        f64 size = arena.state.first_node->size / KB;
+        f64 size = arena.cur_block->size / KB;
         print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
     {
-        CyArenaNode *first_node = arena.state.first_node;
-        while (first_node->offset < first_node->size)
+        CyMemoryBlock *cur_block = arena.cur_block;
+        while (cur_block->offset < cur_block->size)
             (void)cy_alloc_align(a, 0x1, 1);
 
         print_s("exhausted arena (ofs: %zu, size: %zu)",
-            first_node->offset, first_node->size);
+            cur_block->offset, cur_block->size);
     }
     {
         u8 val = 69;
-        CyArenaNode *first_node = arena.state.first_node;
-        cy_mem_set(first_node->buf, val, first_node->size);
-        print_s("wrote [%u] to arena (%.2lfKB)", val, first_node->size / KB);
+        CyMemoryBlock *cur_block = arena.cur_block;
+        cy_mem_set(cur_block->start, val, cur_block->size);
+        print_s("wrote [%u] to arena (%.2lfKB)", val, cur_block->size / KB);
     }
     {
         const char *str = "basolutely.";
@@ -134,9 +131,9 @@ static void test_arena_allocator(void)
     {
         cy_free_all(a);
         TEST_ASSERT(
-            arena.state.first_node->offset == 0, "unexpected arena offset"
+            arena.cur_block->offset == 0, "unexpected arena offset"
         );
-        f64 size = arena.state.first_node->size / KB;
+        f64 size = arena.cur_block->size / KB;
         print_s("freed whole arena (Available size: %.2lfKB)", size);
     }
 

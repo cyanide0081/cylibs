@@ -3,5 +3,6 @@
 -Wall
 -Wextra
 -Wsign-conversion
+-ferror-limit=4
 
 -pedantic

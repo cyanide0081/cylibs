@@ -87,6 +87,50 @@ int main(void)
     );
 
     cy_printf("\n");
+    cy_printf("stb_printf:\n");
+
+    start = cy_ticks_query();
+
+    CyFile *stdout = cy_file_get_std_handle(CY_FILE_STD_OUT);
+    
+    f = 0.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 0.5000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 1.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = -1.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 100.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 1000.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 10000.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 12345.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 100000.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+    f = 123456.0000;
+    len = stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
+    cy_file_write(stdout, buf, len);
+
+    elapsed = cy_ticks_elapsed(start, cy_ticks_query());
+    cy_printf(
+        "time elapsed: %.3fμs\n",
+        cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS)
+    );
+
+    cy_printf("\n");
     cy_printf("printf(libc):\n");
 
     start = cy_ticks_query();
@@ -117,49 +161,6 @@ int main(void)
         "time elapsed: %.3fμs\n",
         cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS)
     );
-
-    cy_printf("\n");
-    cy_printf("stb_printf:\n");
-
-    start = cy_ticks_query();
-
-    f = 0.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 0.5000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 1.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = -1.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 100.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 1000.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 10000.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 12345.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 100000.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-    f = 123456.0000;
-    stbsp_snprintf(buf, buf_size, fmt, f, f, f, f);
-    cy_printf("%s", buf);
-
-    elapsed = cy_ticks_elapsed(start, cy_ticks_query());
-    cy_printf(
-        "time elapsed: %.3fμs\n",
-        cy_ticks_to_time_unit(elapsed, CY_MICROSECONDS)
-    );
-    cy_printf("\n");
 
     unsigned oct = 1233;
     cy_printf("octal:        %o\n", oct);
