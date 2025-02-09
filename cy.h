@@ -9,7 +9,7 @@
  * (allocators, strings, file I/O, etc.) are borrowed from/inspired by
  *  GingerBill's gb library -> https://github.com/gingerBill/gb
  */
- 
+
 /******************************************************************************
  *                               DECLARATIONS                                 *
  ******************************************************************************/
@@ -22,7 +22,7 @@
 #else
     #error Unsupported compiler
 #endif
- 
+
 #if defined(_WIN32) || defined(_WIN64)
     #define CY_OS_WINDOWS 1
     #ifndef __MINGW32__
@@ -35,9 +35,9 @@
     #define WIN32_MEAN_AND_LEAN 1
     #define VC_EXTRALEAN 1
     #define NOMINMAX 1
-    
+
     #include <windows.h>
-    
+
     #undef NOMINMAX
     #undef VC_EXTRALEAN
     #undef WIN32_MEAN_AND_LEAN
@@ -168,7 +168,7 @@ typedef double f64;
 CY_STATIC_ASSERT(sizeof(f32) == 4);
 CY_STATIC_ASSERT(sizeof(f64) == 8);
 
-#if defined(CY_OS_UNIX) 
+#if defined(CY_OS_UNIX)
     #include <stddef.h>
 #endif
 
@@ -504,7 +504,7 @@ CY_DEF char *cy_aprintf(CyAllocator a, const char *fmt, ...) CY__FMT_ATTR(2);
 CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
 
 /**
- * Extended implementation of the snprintf function from the C99 standard 
+ * Extended implementation of the snprintf function from the C99 standard
  * (no sprintf without a buffer size parameter because that'd be a bit silly)
  * NOTE: you can disable the extended formats by defining CY_STD_C_PRINTF
  * (you'll additionally get the compiler warnings for the format string in case
@@ -515,7 +515,7 @@ CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
  * expect every feature of snprintf, including the return value giving you the
  * theoretical amount of chars necessary for this conversion even if the buffer
  * you provided isn't large enough for the string to be stored in it
- * 
+ *
  * If any conversion error occurs because of bad or missing parameters, an error
  * message will be written to the buffer, an argument will be consumed and
  * discarded and the format string parsing will continue
@@ -529,7 +529,7 @@ CY_DEF char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va);
  * Explicit-sized integers:
  *   You can explicitly size any integer input flag by appending its size to it
  *   (e.g.: %u32, %i64, %b8, etc.) NOTE: if you specify both C-style length
- *   modifiers and the bitsize specifiers, the C-style ones will be ignored 
+ *   modifiers and the bitsize specifiers, the C-style ones will be ignored
  */
 CY_DEF isize cy_sprintf(
     char *buf, isize size, const char *fmt, ...
@@ -566,7 +566,6 @@ CY_DEF CyMemoryBlock *cy_virtual_memory_resize(
 
 
 /* =============================== Allocators =============================== */
-
 typedef enum {
     CY_ALLOCATION_ALLOC,
     CY_ALLOCATION_ALLOC_ALL,
@@ -661,8 +660,8 @@ CY_DEF CyAllocator cy_heap_allocator(void);
 
 /* ---------------------------- Static Allocator ---------------------------- */
 typedef struct {
-    void *memory; 
-    isize size; 
+    void *memory;
+    isize size;
 } CyBuffer;
 
 CY_DEF CyAllocatorProc cy_static_allocator_proc;
@@ -1678,6 +1677,9 @@ cy_inline isize cy_fprintf(CyFile *f, const char *fmt, ...)
 
 cy_inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
 {
+    va_list va_dup;
+    va_copy(va_dup, va);
+
     char static_buf[CY__FMT_STATIC_BUF_SIZE];
     isize static_size = CY_ARRAY_LEN(static_buf);
     isize len = cy_sprintf_va(static_buf, static_size, fmt, va);
@@ -1688,7 +1690,7 @@ cy_inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
         isize heap_size = len + 1;
         char *heap_buf = cy_alloc_array(cy_heap_allocator(), char, heap_size);
         if (heap_buf != NULL) {
-            len = cy_sprintf_va(heap_buf, heap_size, fmt, va);
+            len = cy_sprintf_va(heap_buf, heap_size, fmt, va_dup);
             CY_ASSERT(len < heap_size);
 
             src = heap_buf;
@@ -1696,7 +1698,7 @@ cy_inline isize cy_fprintf_va(CyFile *f, const char *fmt, va_list va)
             use_heap = false;
         }
     }
-    
+
     cy_file_write(f, src, len);
     if (use_heap) {
         cy_free(cy_heap_allocator(), src);
@@ -1717,6 +1719,9 @@ cy_inline char *cy_aprintf(CyAllocator a, const char *fmt, ...)
 
 cy_inline char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va)
 {
+    va_list va_dup;
+     va_copy(va_dup, va);
+
     isize init_size = 4096;
     char *buf = cy_alloc(a, init_size);
     isize len = cy_sprintf_va(buf, init_size, fmt, va);
@@ -1730,7 +1735,7 @@ cy_inline char *cy_aprintf_va(CyAllocator a, const char *fmt, va_list va)
 
     buf = new_buf;
     if (new_size > init_size) {
-        cy_sprintf_va(buf, new_size, fmt, va);
+        cy_sprintf_va(buf, new_size, fmt, va_dup);
     }
 
     return buf;
@@ -1893,7 +1898,7 @@ typedef CY__PRINT_PROC(CyPrivPrintProc);
 cy_internal CY__PRINT_PROC(cy__print_u64)
 {
     u64 n = info.value.u;
-    
+
     const isize limit = cap - 1;
     isize written = 0;
     isize written_total = 0;
@@ -2001,7 +2006,7 @@ cy_internal CY__PRINT_PROC(cy__print_u64)
 cy_internal CY__PRINT_PROC(cy__print_i64)
 {
     i64 n = info.value.i;
-    
+
     const isize limit = cap - 1;
     isize written = 0;
     isize written_total = 0;
@@ -2097,7 +2102,7 @@ cy_internal CY__PRINT_PROC(cy__print_str)
 {
     const char *src = (const char*)info.value.s.text;
     isize len = info.value.s.len;
-    
+
     const isize limit = cap - 1;
     isize written = 0;
     isize written_total = 0;
@@ -2170,7 +2175,7 @@ cy_global const f64 cy__pow_of_16_table[] = {
 cy_internal CY__PRINT_PROC(cy__print_f64)
 {
     f64 n = info.value.f;
-    
+
     const isize limit = cap - 1;
     isize written = 0;
     isize written_total = 0;
@@ -2273,7 +2278,7 @@ cy_internal CY__PRINT_PROC(cy__print_f64)
     isize len_total = integral_len = cy__print_u64(
         cur, remaining, (CyPrivFmtInfo){
             .base = info.base,
-            .precision = -1, 
+            .precision = -1,
             .value.u = integral,
         }
     );
@@ -2440,7 +2445,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
     const isize limit = size - 1;
     isize written_total = 0;
     isize written = 0;
-    
+
     char conv_buf_static[CY__FMT_STATIC_BUF_SIZE];
     isize conv_cap_static = CY_ARRAY_LEN(conv_buf_static) - 1;
     char *conv_buf_heap = NULL;
@@ -2722,7 +2727,7 @@ isize cy_sprintf_va(char *buf, isize size, const char *fmt, va_list va)
 
             f += skip;
         }
-        
+
         if (bit_size > 0) {
             if (info.flags & CY__FMT_UNSIGNED) {
                 u64 val = 0;
@@ -2885,15 +2890,15 @@ fmt_convert:
                     cy_free(cy_heap_allocator(), conv_buf_heap);
                     return -1;
                 }
-                
+
                 conv_buf_heap = new_heap_buf;
                 conv_cap_heap = conv_cap;
                 conv_buf = conv_buf_heap;
                 conv_len = print_proc(conv_buf, conv_cap, info);
             }
         }
-        
-        
+
+
         b32 right_pad = info.flags & CY__FMT_MINUS;
         b32 fill_with_zeros = !right_pad && (info.flags & CY__FMT_ZERO);
         if (!fill_with_zeros && conv_len < info.width) {
@@ -2926,7 +2931,7 @@ fmt_convert:
     if (conv_buf_heap != NULL) {
         cy_free(cy_heap_allocator(), conv_buf_heap);
     }
-    
+
     if (end != NULL) {
         *end = '\0';
     }
@@ -2953,7 +2958,7 @@ cy_inline CyMemoryBlock *cy_virtual_memory_alloc(isize size)
 CyMemoryBlock *cy_virtual_memory_alloc_reserve(isize size, isize commit_size)
 {
     CY_ASSERT(commit_size <= size);
-    
+
     isize page_size = cy_virtual_memory_page_size(NULL);
     isize total_size = size + cy_sizeof(CyOSMemoryBlock);
     isize total_commit_size = commit_size + cy_sizeof(CyOSMemoryBlock);
@@ -2965,13 +2970,13 @@ CyMemoryBlock *cy_virtual_memory_alloc_reserve(isize size, isize commit_size)
     );
     total_size = aligned_size + 2 * page_size;
     total_commit_size = page_size + aligned_commit_size;
-    
+
     start_offset = page_size + aligned_size - size;
     isize protect_offset = page_size + aligned_size;
 
     CyOSMemoryBlock *os_block = cy__os_virtual_memory_reserve(total_size);
     CY_ASSERT_MSG(os_block != NULL, "out of virtual memory D:");
-    
+
     cy__os_virtual_memory_commit(os_block, total_commit_size);
     CY_ASSERT(os_block->block.start == NULL);
 
@@ -3008,12 +3013,12 @@ cy_inline CyMemoryBlock *cy_virtual_memory_resize(
     CyMemoryBlock *block, isize new_size
 ) {
     CY_VALIDATE_PTR(block);
-    
+
     isize old_size = block->size;
     if (new_size < old_size) {
         void *new_start = (u8*)block->start + (old_size - new_size);
         cy_mem_move(new_start, block->start, new_size);
-        
+
         block->start = new_start;
         block->size = new_size;
         return block;
@@ -3034,7 +3039,7 @@ cy_inline isize cy_virtual_memory_page_size(isize *align_out)
     if (align_out != NULL) {
         *align_out = (isize)info.dwAllocationGranularity;
     }
-    
+
     return (isize)info.dwPageSize;
 }
 
@@ -3056,7 +3061,7 @@ cy_internal cy_inline void cy__os_virtual_memory_free(CyOSMemoryBlock *block)
 cy_internal cy_inline void cy__os_virtual_memory_protect(void *mem, isize size)
 {
     cy__os_virtual_memory_commit(mem, size);
-    
+
     DWORD old_protect = 0;
     BOOL ok = VirtualProtect(mem, (usize)size, PAGE_NOACCESS, &old_protect);
     CY_ASSERT(ok);
@@ -3305,14 +3310,14 @@ CY_ALLOCATOR_PROC(cy_static_allocator_proc)
             cy_mem_zero(ptr, size);
         }
     } break;
-    case CY_ALLOCATION_FREE: 
-    case CY_ALLOCATION_FREE_ALL: 
+    case CY_ALLOCATION_FREE:
+    case CY_ALLOCATION_FREE_ALL:
     case CY_ALLOCATION_RESIZE: {
         CY_PANIC("static allocator: unsupported operation");
     } break;
     }
 
-    return ptr;   
+    return ptr;
 }
 
 /* ---------------------- Virtual Memory (VM) Allocator --------------------- */
@@ -3359,18 +3364,18 @@ CY_ALLOCATOR_PROC(cy_virtual_memory_allocator_proc)
     case CY_ALLOCATION_RESIZE: {
         uintptr *header = cy__vm_header_from_alloc_start(old_mem);
         CyMemoryBlock *block = (CyMemoryBlock*)(*header);
-            
+
         CyMemoryBlock *new_block = cy_virtual_memory_resize(block, size);
         if (new_block == NULL) {
             break;
         }
-        
+
         ptr = new_block->start;
         header = cy__vm_header_from_alloc_start(ptr);
         *header = (uintptr)new_block;
     } break;
-    case CY_ALLOCATION_ALLOC_ALL: 
-    case CY_ALLOCATION_FREE_ALL: { 
+    case CY_ALLOCATION_ALLOC_ALL:
+    case CY_ALLOCATION_FREE_ALL: {
         CY_PANIC("VM allocator: unsupported operation");
     } break;
     }
@@ -3462,7 +3467,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
 
                 cur_block = cy_arena_insert_block(arena, new_size);
                 CY_VALIDATE_PTR(cur_block);
-                    
+
                 end = (u8*)cur_block->start + cur_block->offset;
                 aligned_end = cy_align_forward_ptr(end, align);
                 break;
@@ -3537,7 +3542,7 @@ CY_ALLOCATOR_PROC(cy_arena_allocator_proc)
             cur_block = cur_block->prev;
             start = cur_block->start;
         }
-            
+
         if (!is_in_range) {
             CY_PANIC("arena allocator: out-of-bounds reallocation");
             break;
@@ -3853,15 +3858,15 @@ cy_inline CyPool cy_pool_init_align(
         CY_PANIC("pool allocator: chunk size is too small");
         return pool;
     }
-    
+
     isize chunk_size_total = chunk_size + chunk_align;
     isize buf_size = chunks * chunk_size_total;
     void *buf = cy_alloc_align(backing, buf_size, chunk_align);
     if (buf == NULL) {
         buf_size = 0;
-        chunk_size = 0;        
+        chunk_size = 0;
     }
-    
+
     pool = (CyPool){
         .backing = backing,
         .memory = buf,
@@ -3872,7 +3877,7 @@ cy_inline CyPool cy_pool_init_align(
     };
     CyAllocator a = cy_pool_allocator(&pool);
     cy_free_all(a);
-   
+
     return pool;
 }
 
@@ -3900,9 +3905,9 @@ CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
             CY_PANIC("pool allocator: out of memory");
             break;
         }
-        
+
         ptr = pool->free_list_head;
-        
+
         uintptr *next_free = (uintptr*)pool->free_list_head;
         pool->free_list_head = (void*)*next_free;
         if (flags & CY_ALLOCATOR_CLEAR_TO_ZERO) {
@@ -3913,7 +3918,7 @@ CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
         if (old_mem == NULL) {
             break;
         }
-            
+
         isize chunk_size_total = pool->chunk_size + pool->chunk_align;
         isize pool_size = pool->chunks * chunk_size_total;
         void *pool_end = (void*)((uintptr)pool->memory + (uintptr)pool_size);
@@ -3938,13 +3943,13 @@ CY_ALLOCATOR_PROC(cy_pool_allocator_proc)
         uintptr *end = (uintptr*)cur_chunk;
         *end = (uintptr)NULL; // NOTE(cya): free list tail
     } break;
-    case CY_ALLOCATION_ALLOC_ALL: 
+    case CY_ALLOCATION_ALLOC_ALL:
     case CY_ALLOCATION_RESIZE: {
         CY_PANIC("pool allocator: unsupported operation");
     } break;
     }
 
-    return ptr;   
+    return ptr;
 }
 
 /* ============================== Char procs =============================== */
@@ -4174,7 +4179,7 @@ cy_inline void cy_str_to_lower(char *str)
     if (str == NULL) {
         return;
     }
-    
+
     for (; *str != '\0'; str++) {
         *str = cy_char_to_lower(*str);
     }
@@ -4185,7 +4190,7 @@ cy_inline void cy_str_to_upper(char *str)
     if (str == NULL) {
         return;
     }
-    
+
     for (; *str != '\0'; str++) {
         *str = cy_char_to_upper(*str);
     }
